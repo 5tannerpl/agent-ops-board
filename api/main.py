@@ -56,6 +56,13 @@ def model_info() -> dict:
     return _model_cache["value"]
 
 
+def supervisor_status(conn) -> dict:
+    beat = db.get_setting(conn, "supervisor_heartbeat")
+    age = db.now() - float(beat) if beat else None
+    return {"alive": age is not None and age < 10, "heartbeat_age_seconds": round(age, 1) if age is not None else None,
+            "pid": db.get_setting(conn, "supervisor_pid"), "db_path": str(config.DB_PATH)}
+
+
 @app.get("/v1/dashboard")
 def dashboard(test_run_id: str | None = None, conn=Depends(get_conn)):
     run = queries.latest_run(conn, valid_id(test_run_id) if test_run_id else None)
@@ -66,7 +73,7 @@ def dashboard(test_run_id: str | None = None, conn=Depends(get_conn)):
     return {"server_time": now, "scope": "run" if run else "all", "model": model_info(),
             "run": queries.run_view(run, now) if run else None,
             "metrics": run_metrics(conn, run, now), "workers": queries.list_workers(conn),
-            "synthetic": True}
+            "supervisor": supervisor_status(conn), "synthetic": True}
 
 
 @app.get("/v1/workers")

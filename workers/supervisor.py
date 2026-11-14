@@ -2,9 +2,11 @@
 desired worker count that the API stores in settings."""
 import argparse
 import multiprocessing as mp
+import os
 import signal
 import time
 
+import config
 from storage import db
 from workers import worker
 
@@ -37,6 +39,8 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     print(f"supervisor: {args.workers} worker(s); Ctrl-C to stop", flush=True)
     while running:
+        db.set_setting(conn, "supervisor_heartbeat", str(time.time()))
+        db.set_setting(conn, "supervisor_pid", str(os.getpid()))
         desired = args.workers if args.no_follow_api else int(db.get_setting(conn, "desired_workers", str(args.workers)))
         wanted = [f"worker-{i:02d}" for i in range(1, desired + 1)]
         for wid in list(procs):
@@ -50,6 +54,7 @@ def main() -> None:
             if wid not in procs and time.time() - died_at.get(wid, 0) >= RESTART_DELAY:
                 procs[wid] = ctx.Process(target=_entry, args=(wid,), name=wid)
                 procs[wid].start()
+                print(f"supervisor: started {wid} (pid {procs[wid].pid}), db={config.DB_PATH}", flush=True)
         time.sleep(1)
     for p in procs.values():
         p.terminate()

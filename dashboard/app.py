@@ -136,7 +136,15 @@ def live_section() -> None:
                 ui.open_worker(prev[ev.selection.rows[0]])
             st.caption("Select a row to open the Worker Monitor.")
         else:
-            st.info("No workers registered. Start them with `python -m workers.supervisor --workers 2`.")
+            sup = snap["supervisor"]
+            if not sup["alive"]:
+                st.error("No worker supervisor is running against the API's database, so queued units will not be "
+                         "processed. Start it from the repo root with `python -m workers.supervisor --workers 2` "
+                         "(or `python run_demo.py` to start everything). It must use the same `runtime/` folder / "
+                         f"`AOB_DB_PATH` as the API: `{sup['db_path']}`")
+            else:
+                st.warning(f"Supervisor (pid {sup['pid']}) is running but no worker has registered. Check the "
+                           "supervisor terminal for worker start-up errors.")
 
 
 live_section()
