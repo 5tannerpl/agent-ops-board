@@ -7,7 +7,8 @@ import streamlit as st
 import api_client
 import ui
 
-ui.page_header("Dashboard")
+ui.page_header("Agent Ops Board")
+ui.inject_area_css()
 
 STATUSES = ["PENDING", "RUNNING", "WAITING_RETRY", "COMPLETED", "FAILED", "MANUAL_REVIEW"]
 INTENTS = ["PAYMENT_VERIFICATION", "DEBT_DISPUTE", "PAYMENT_ARRANGEMENT", "HARDSHIP_NOTIFICATION",
@@ -71,77 +72,77 @@ def live_section() -> None:
         st.rerun()  # run started/finished: re-evaluate controls and refresh interval
     m, counts = snap["metrics"], snap["metrics"]["counts"]
 
-    ui.model_banner(snap["model"])
-    if run_now:
-        st.markdown(
-            f"**{run_now['test_run_id']}** · {ui.badge(run_now['state'])} · scenario `{run_now['scenario']}` · "
-            f"workers {run_now['worker_count']} · started {ui.fmt_ts(run_now['started_at'])} · "
-            f"elapsed **{ui.fmt_dur(run_now['elapsed_seconds'])}** of "
-            f"{ui.fmt_dur(run_now['completion_deadline_seconds'])} target")
-        st.progress(min(m["completion_pct"] / 100, 1.0),
-                    text=f"{m['completion_pct']}% completed ({counts['completed']}/{m['target_count']}) · "
-                         f"produced {run_now['produced_count']}/{run_now['target_count']}")
-        if run_now["deadline_exceeded"]:
-            st.error("Completion deadline exceeded — the all-completed acceptance target can no longer be met.")
-        acc = run_now["acceptance"]
-        if acc:
-            detail = (f"completed {counts['completed']}/{run_now['target_count']} in "
-                      f"{ui.fmt_dur(run_now['elapsed_seconds'])} (deadline {ui.fmt_dur(acc['deadline_seconds'])})")
-            if acc["passed"]:
-                st.success(f"Acceptance target met: {detail}. "
-                           "A pass counts only for a real model backend on the recorded hardware.")
-            else:
-                st.error(f"Acceptance target NOT met: {detail}. Failed/manual-review units remain visible below.")
-        if run_now["stop_requested"] and run_now["state"] == "RUNNING":
-            st.warning("Stop requested: no new units are produced; queued jobs continue.")
-    else:
-        st.info("No load test yet. Showing all intake units.")
+    with st.container(key="area_dashboard"):
+        ui.area_header("dashboard")
+        ui.model_banner(snap["model"])
+        if run_now:
+            st.markdown(
+                f"**{run_now['test_run_id']}** · {ui.badge(run_now['state'])} · scenario `{run_now['scenario']}` · "
+                f"workers {run_now['worker_count']} · started {ui.fmt_ts(run_now['started_at'])} · "
+                f"elapsed **{ui.fmt_dur(run_now['elapsed_seconds'])}** of "
+                f"{ui.fmt_dur(run_now['completion_deadline_seconds'])} target")
+            st.progress(min(m["completion_pct"] / 100, 1.0),
+                        text=f"{m['completion_pct']}% completed ({counts['completed']}/{m['target_count']}) · "
+                             f"produced {run_now['produced_count']}/{run_now['target_count']}")
+            if run_now["deadline_exceeded"]:
+                st.error("Completion deadline exceeded — the all-completed acceptance target can no longer be met.")
+            acc = run_now["acceptance"]
+            if acc:
+                detail = (f"completed {counts['completed']}/{run_now['target_count']} in "
+                          f"{ui.fmt_dur(run_now['elapsed_seconds'])} (deadline {ui.fmt_dur(acc['deadline_seconds'])})")
+                if acc["passed"]:
+                    st.success(f"Acceptance target met: {detail}. "
+                               "A pass counts only for a real model backend on the recorded hardware.")
+                else:
+                    st.error(f"Acceptance target NOT met: {detail}. Failed/manual-review units remain visible below.")
+            if run_now["stop_requested"] and run_now["state"] == "RUNNING":
+                st.warning("Stop requested: no new units are produced; queued jobs continue.")
+        else:
+            st.info("No load test yet. Showing all intake units.")
 
-    cols = st.columns(6)
-    for col, (label, key) in zip(cols, [("Received", "received"), ("Completed", "completed"),
-                                         ("Running", "running"), ("Pending", "pending"),
-                                         ("Waiting Retry", "waiting_retry"), ("Failed", "failed")]):
-        col.metric(label, counts[key])
-    if counts["manual_review"]:
-        st.warning(f"{counts['manual_review']} unit(s) in MANUAL_REVIEW (counted separately, still visible).")
-    k = st.columns(6)
-    k[0].metric("Completion", f"{m['completion_pct']}%")
-    k[1].metric("Completed / min", m["completed_per_min"], help=f"Required: {m['required_per_min']}/min")
-    k[2].metric("Latency P50", ui.fmt_dur(m["latency_p50_s"]))
-    k[3].metric("Latency P95", ui.fmt_dur(m["latency_p95_s"]))
-    k[4].metric("Queue depth", m["queue_depth"])
-    est = m["estimated_remaining_seconds"]
-    k[5].metric("Est. remaining", ui.fmt_dur(est) if est is not None else "—",
-                help="Estimate from measured throughput only; shown once ≥5 units completed.")
-    st.caption(f"Retry attempts: {m['retry_attempts']} across {m['units_with_retries']} unit(s). "
-               "KPIs count each unit once.")
+        cols = st.columns(6)
+        for col, (label, key) in zip(cols, [("Received", "received"), ("Completed", "completed"),
+                                             ("Running", "running"), ("Pending", "pending"),
+                                             ("Waiting Retry", "waiting_retry"), ("Failed", "failed")]):
+            col.metric(label, counts[key])
+        if counts["manual_review"]:
+            st.warning(f"{counts['manual_review']} unit(s) in MANUAL_REVIEW (counted separately, still visible).")
+        k = st.columns(6)
+        k[0].metric("Completion", f"{m['completion_pct']}%")
+        k[1].metric("Completed / min", m["completed_per_min"], help=f"Required: {m['required_per_min']}/min")
+        k[2].metric("Latency P50", ui.fmt_dur(m["latency_p50_s"]))
+        k[3].metric("Latency P95", ui.fmt_dur(m["latency_p95_s"]))
+        k[4].metric("Queue depth", m["queue_depth"])
+        est = m["estimated_remaining_seconds"]
+        k[5].metric("Est. remaining", ui.fmt_dur(est) if est is not None else "—",
+                    help="Estimate from measured throughput only; shown once ≥5 units completed.")
+        st.caption(f"Retry attempts: {m['retry_attempts']} across {m['units_with_retries']} unit(s). "
+                   "KPIs count each unit once.")
 
-    st.subheader("Workers")
-    rows = [{"Worker": w["worker_id"], "Status": ui.badge(w["state"]), "Health": w["health"],
-             "Current Unit": w["current_unit_id"] or "—", "Current Step": w["current_step"] or "—",
-             "Attempt": str(w["attempt"]) if w["current_unit_id"] and w["attempt"] else "—",
-             "Step elapsed": ui.fmt_dur(w["step_elapsed_seconds"]),
-             "Heartbeat": ui.fmt_age(w["heartbeat_age_seconds"])} for w in snap["workers"]]
-    if rows:
-        prev = st.session_state.get("worker_ids", [])
-        ev = st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", on_select="rerun",
-                          selection_mode="single-row", key="worker_table")
-        st.session_state["worker_ids"] = [r["Worker"] for r in rows]
-        if ev.selection.rows and ev.selection.rows[0] < len(prev):
-            ui.open_worker(prev[ev.selection.rows[0]])
-        st.caption("Select a row to open the Worker Monitor.")
-    else:
-        st.info("No workers registered. Start them with `python -m workers.supervisor --workers 2`.")
+
+    with st.container(key="area_workers"):
+        ui.area_header("workers")
+        rows = [{"Worker": w["worker_id"], "Status": ui.badge(w["state"]), "Health": w["health"],
+                 "Current Unit": w["current_unit_id"] or "—", "Current Step": w["current_step"] or "—",
+                 "Attempt": str(w["attempt"]) if w["current_unit_id"] and w["attempt"] else "—",
+                 "Step elapsed": ui.fmt_dur(w["step_elapsed_seconds"]),
+                 "Heartbeat": ui.fmt_age(w["heartbeat_age_seconds"])} for w in snap["workers"]]
+        if rows:
+            prev = st.session_state.get("worker_ids", [])
+            ev = st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", on_select="rerun",
+                              selection_mode="single-row", key="worker_table")
+            st.session_state["worker_ids"] = [r["Worker"] for r in rows]
+            if ev.selection.rows and ev.selection.rows[0] < len(prev):
+                ui.open_worker(prev[ev.selection.rows[0]])
+            st.caption("Select a row to open the Worker Monitor.")
+        else:
+            st.info("No workers registered. Start them with `python -m workers.supervisor --workers 2`.")
 
 
 live_section()
 
 # ---- intake units -------------------------------------------------------------
-st.subheader("Intake units")
-
-
-@st.fragment(run_every=5 if active else 15)
-def units_section() -> None:
+def units_body() -> None:
     f = st.columns([2, 1, 1.4, 1.2, 1.6, 1.4])
     q = f[0].text_input("Unit ID contains", key="f_q")
     channel = f[1].selectbox("Channel", ["", "email", "chat", "voice"], key="f_channel")
@@ -174,6 +175,13 @@ def units_section() -> None:
     if ev.selection.rows and ev.selection.rows[0] < len(prev):
         ui.open_unit(prev[ev.selection.rows[0]])
     st.caption("Select a row to open the Intake Unit Detail.")
+
+
+@st.fragment(run_every=5 if active else 15)
+def units_section() -> None:
+    with st.container(key="area_units"):
+        ui.area_header("units")
+        units_body()
 
 
 units_section()

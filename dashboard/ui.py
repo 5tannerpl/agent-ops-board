@@ -79,3 +79,36 @@ def stat(col, label: str, value) -> None:
     """Compact label/value tile that does not truncate long values (unlike st.metric)."""
     col.caption(label)
     col.markdown(f"**{value}**")
+
+
+AREAS = {
+    "dashboard": ("#6366f1", "99,102,241", "Dashboard", "Live load-test progress and KPIs"),
+    "workers": ("#10b981", "16,185,129", "Workers", "Health, current unit and step"),
+    "units": ("#f59e0b", "245,158,11", "Intake units", "Search, filter and open a unit"),
+}
+
+
+def inject_area_css() -> None:
+    """Colour-coded section cards: one accent per area (dashboard / workers / units)."""
+    rules = []
+    for key, (hex_, rgb, _, _) in AREAS.items():
+        rules.append(
+            f".st-key-area_{key} {{border-radius:16px; padding:1rem 1.4rem 1.2rem; margin:1.1rem 0;"
+            f"border:1px solid rgba({rgb},.28); border-left:7px solid {hex_};"
+            f"background:linear-gradient(135deg, rgba({rgb},.10) 0%, rgba({rgb},.02) 55%, transparent 100%);"
+            f"box-shadow:0 2px 10px rgba({rgb},.12);}}"
+            f".area-{key} .area-title {{color:{hex_};}} .area-{key} .area-dot {{background:{hex_};"
+            f"box-shadow:0 0 0 4px rgba({rgb},.22);}}")
+    rules.append(
+        ".area-head {display:flex; align-items:center; gap:.7rem; margin:.1rem 0 .8rem;}"
+        ".area-dot {width:12px; height:12px; border-radius:50%;}"
+        ".area-title {font-size:1.45rem; font-weight:700; letter-spacing:-.01em;}"
+        ".area-sub {opacity:.65; font-size:.9rem; margin-left:.2rem;}")
+    st.markdown(f"<style>{''.join(rules)}</style>", unsafe_allow_html=True)
+
+
+def area_header(key: str) -> None:
+    _, _, title, sub = AREAS[key]
+    st.markdown(f'<div class="area-head area-{key}"><span class="area-dot"></span>'
+                f'<span class="area-title">{title}</span><span class="area-sub">{sub}</span></div>',
+                unsafe_allow_html=True)
