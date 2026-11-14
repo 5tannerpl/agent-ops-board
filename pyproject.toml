@@ -1,0 +1,9 @@
+[project]
+name = "agent-ops-board"
+version = "1.0.0"
+description = "Multi-channel Intake Agent monitoring demo: workers, local Qwen, FastAPI and Streamlit dashboard"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = [".", "dashboard"]
+testpaths = ["tests"]
