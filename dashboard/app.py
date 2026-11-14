@@ -116,6 +116,10 @@ def live_section() -> None:
         est = m["estimated_remaining_seconds"]
         k[5].metric("Est. remaining", ui.fmt_dur(est) if est is not None else "—",
                     help="Estimate from measured throughput only; shown once ≥5 units completed.")
+        if m["error_codes"]:
+            st.warning("Current failures by error code: " + ", ".join(f"`{c}` × {n}" for c, n in m["error_codes"].items())
+                       + (" — the model did not answer in time; check `python -m workers.check_model`."
+                          if "LLM_TIMEOUT" in m["error_codes"] else ""))
         st.caption(f"Retry attempts: {m['retry_attempts']} across {m['units_with_retries']} unit(s). "
                    "KPIs count each unit once.")
 

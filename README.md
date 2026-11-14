@@ -46,6 +46,14 @@ Click **Start Load Test** in the UI, or run headless: `python -m loadtest --scen
 `AOB_MODEL_BACKEND=mock` is a rule-based stand-in for development/tests. The UI labels it **SIMULATED**;
 its timings are not throughput evidence. `AOB_MOCK_LATENCY` adds an optional delay purely to slow demos down.
 
+## Checking the real model first
+
+`python -m workers.check_model --runs 3` runs real inference on synthetic units and prints per-unit latency
+and output validity. Do this before a load test: 350 units in 600 s needs ~35 units/min in total. On a
+CPU-only laptop use a small model (e.g. `qwen2.5:1.5b` / `0.5b`) and 1 worker, because Ollama serialises
+requests and queue wait counts against `AOB_MODEL_TIMEOUT` (default 120 s). Use a small unit count (e.g. 20,
+`burst_350`) to calibrate.
+
 ## Behaviour
 
 - **Scenarios:** `multi_channel_350` (arrivals spread over `arrival_window_seconds`, completion deadline

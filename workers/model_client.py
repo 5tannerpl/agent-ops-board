@@ -66,9 +66,9 @@ class OllamaClient(_HttpClient):
 
     def generate(self, system: str, user: str, timeout: float) -> str:
         data = self._post("/api/chat", {
-            "model": self.model, "stream": False, "format": "json",
+            "model": self.model, "stream": False, "format": "json", "keep_alive": "30m",
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "options": {"temperature": 0, "num_predict": 600}}, timeout)
+            "options": {"temperature": 0, "num_predict": 400, "num_ctx": 2048}}, timeout)
         return data["message"]["content"]
 
     def server_version(self) -> str | None:

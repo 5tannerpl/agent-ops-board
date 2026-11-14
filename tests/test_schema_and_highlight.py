@@ -43,3 +43,8 @@ def test_highlight_escapes_html_and_handles_overlap():
 def test_valid_spans_rejects_stale_offsets():
     ev = {"verified": True, "start_offset": 0, "end_offset": 4, "quote": "nope"}
     assert highlight.valid_spans("text here", [ev], "A") == []
+
+
+def test_reasoning_block_is_ignored():
+    raw = '<think>maybe {"intents": 1} hmm</think>{"intents": []}'
+    assert schema.validate_output(raw, SEGS)["intents"] == []

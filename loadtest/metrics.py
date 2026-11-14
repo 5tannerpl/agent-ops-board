@@ -65,7 +65,13 @@ def run_metrics(conn, run: dict | None, now: float | None = None) -> dict:
         "SELECT COALESCE(SUM(MAX(j.attempt-1,0)),0) AS n, COALESCE(SUM(j.attempt>1),0) AS units "
         "FROM intake_jobs j JOIN intake_units u ON u.unit_id=j.unit_id "
         + ("WHERE u.test_run_id=?" if run_id else ""), (run_id,) if run_id else ()).fetchone()
+    errors = {r["last_error_code"]: r["n"] for r in conn.execute(
+        "SELECT j.last_error_code, COUNT(*) AS n FROM intake_jobs j JOIN intake_units u ON u.unit_id=j.unit_id "
+        "WHERE j.status IN ('WAITING_RETRY','FAILED','MANUAL_REVIEW') AND j.last_error_code IS NOT NULL"
+        + (" AND u.test_run_id=?" if run_id else "") + " GROUP BY j.last_error_code ORDER BY n DESC",
+        (run_id,) if run_id else ())}
     return {
+        "error_codes": errors,
         "counts": {"received": received, "completed": completed, "running": counts["RUNNING"],
                    "pending": counts["PENDING"], "waiting_retry": counts["WAITING_RETRY"],
                    "failed": counts["FAILED"], "manual_review": counts["MANUAL_REVIEW"]},

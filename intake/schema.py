@@ -57,7 +57,7 @@ def build_repair_prompt(original_prompt: str, previous: str, error: str) -> str:
 
 
 def _extract_json(text: str) -> dict:
-    text = (text or "").strip()
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()  # reasoning models (DeepSeek-R1)
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.S).strip()
     try:
         data = json.loads(text)
