@@ -63,22 +63,32 @@ def aob_emit(event_type, payload=None):
 '''
 
 
+
 def render_scaling_cell() -> str:
-    """Last notebook cell: runs the Worker + GPU autoscaling experiment from the cloned repository."""
-    repo_url = os.getenv("AOB_REPO_URL", "https://github.com/5tannerpl/agent-ops-board.git")
+    """Launch autoscaling demo from kaggle_scaling branch."""
+
+    repo_url = os.getenv(
+        "AOB_REPO_URL",
+        "https://github.com/5tannerpl/agent-ops-board.git"
+    )
+
+    repo_branch = "kaggle_scaling"
+
     if not _REPO_URL_RE.fullmatch(repo_url):
-        raise LaunchError("AOB_REPO_URL must be a plain https URL")
-    return (f"{SCALING_CELL_MARKER}\n"
-            "import subprocess, sys\n"
-            "from pathlib import Path\n"
-            "_aob_candidates = (globals().get('REPO_DIR'), '/kaggle/working/agent-repo', '/kaggle/working/aob-scaling-repo')\n"
-            "_aob_repo = next((Path(p) for p in _aob_candidates if p and (Path(p) / 'scaling' / 'bootstrap.py').is_file()), None)\n"
-            "if _aob_repo is None:\n"
-            "    _aob_repo = Path('/kaggle/working/aob-scaling-repo')\n"
-            f"    subprocess.run(['git', 'clone', '--depth', '1', {repo_url!r}, str(_aob_repo)], check=True)\n"
-            "sys.path.insert(0, str(_aob_repo))\n"
-            "from scaling import bootstrap\n"
-            "AOB_SCALING_SUMMARY = bootstrap.run(globals())\n")
+        raise LaunchError("Invalid AOB_REPO_URL")
+
+    return (
+        f"{SCALING_CELL_MARKER}\n"
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "_aob_repo = Path('/kaggle/working/aob-scaling-repo')\n"
+        "if not (_aob_repo / 'scaling' / 'bootstrap.py').is_file():\n"
+        f"    subprocess.run(['git', 'clone', '--depth', '1', '--branch', {repo_branch!r}, {repo_url!r}, str(_aob_repo)], check=True)\n"
+        "sys.path.insert(0, str(_aob_repo))\n"
+        "from scaling import bootstrap\n"
+        "AOB_SCALING_SUMMARY = bootstrap.run(globals())\n"
+    )
+
 
 
 class LaunchError(Exception):

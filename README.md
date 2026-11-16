@@ -10,21 +10,21 @@ no external replies or account updates.
 
 ## Layout
 
-| Path | Role |
-|---|---|
-| `adapters/` | Synthetic email/chat/voice generators |
-| `intake/` | Canonical intake (`service.py`), prompt + strict output validation (`schema.py`) |
-| `storage/` | SQLite (WAL) schema/transactions, raw-file store with traversal protection |
-| `workers/` | Queue (atomic claim, leases, fencing, retries), worker (6 steps), model clients, supervisor |
-| `orchestration/` | Handoff targets + mock orchestrator (idempotent by `event_id`) |
-| `loadtest/` | Scenarios, producer, metrics, `performance.csv` / `summary.json`, headless CLI |
-| `api/` | FastAPI endpoints (`/v1/...`, per the design) |
-| `dashboard/` | Streamlit: `app.py` (Dashboard), `pages/worker_monitor.py`, `pages/intake_unit_detail.py`; `auth_gate.py` (Auth0 login), `live_demo.py` (Live GPU demo panel) |
-| `demo_*.py` | Private live demo: `demo_auth.py` (Auth0 JWT, whitelist, event signing), `demo_api.py` (`/api/*`), `demo_service.py` (run lifecycle), `kaggle_launcher.py` (Kaggle CLI), `demo_store.py` (SQLite `runtime/demo.db`) |
-| `scaling/` | Autoscaling live demo (runs inside the Kaggle batch): `autoscaler.py`, `policy.py`, `gpu_manager.py`, `inference_router.py` (`:8090`), `scenario.py`, `events.py`, `bootstrap.py` |
-| `demo_scaling.py` | Read models behind `/state`, `/metrics`, `/summary` |
-| `kaggle-notebook/` | `kernel-metadata.json` for the Kaggle GPU batch (put the `.ipynb` here, see below) |
-| `runtime/` | `intake.db`, `raw/`, `attachments/`, `results/{test_run_id}/` (git-ignored) |
+| Path               | Role                                                                                                                                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapters/`        | Synthetic email/chat/voice generators                                                                                                                                                                               |
+| `intake/`          | Canonical intake (`service.py`), prompt + strict output validation (`schema.py`)                                                                                                                                    |
+| `storage/`         | SQLite (WAL) schema/transactions, raw-file store with traversal protection                                                                                                                                          |
+| `workers/`         | Queue (atomic claim, leases, fencing, retries), worker (6 steps), model clients, supervisor                                                                                                                         |
+| `orchestration/`   | Handoff targets + mock orchestrator (idempotent by `event_id`)                                                                                                                                                      |
+| `loadtest/`        | Scenarios, producer, metrics, `performance.csv` / `summary.json`, headless CLI                                                                                                                                      |
+| `api/`             | FastAPI endpoints (`/v1/...`, per the design)                                                                                                                                                                       |
+| `dashboard/`       | Streamlit: `app.py` (Dashboard), `pages/worker_monitor.py`, `pages/intake_unit_detail.py`; `auth_gate.py` (Auth0 login), `live_demo.py` (Live GPU demo panel)                                                       |
+| `demo_*.py`        | Private live demo: `demo_auth.py` (Auth0 JWT, whitelist, event signing), `demo_api.py` (`/api/*`), `demo_service.py` (run lifecycle), `kaggle_launcher.py` (Kaggle CLI), `demo_store.py` (SQLite `runtime/demo.db`) |
+| `scaling/`         | Autoscaling live demo (runs inside the Kaggle batch): `autoscaler.py`, `policy.py`, `gpu_manager.py`, `inference_router.py` (`:8090`), `scenario.py`, `events.py`, `bootstrap.py`                                   |
+| `demo_scaling.py`  | Read models behind `/state`, `/metrics`, `/summary`                                                                                                                                                                 |
+| `kaggle-notebook/` | `kernel-metadata.json` for the Kaggle GPU batch (put the `.ipynb` here, see below)                                                                                                                                  |
+| `runtime/`         | `intake.db`, `raw/`, `attachments/`, `results/{test_run_id}/` (git-ignored)                                                                                                                                         |
 
 ## Run
 
@@ -62,7 +62,7 @@ requests and queue wait counts against `AOB_MODEL_TIMEOUT` (default 120 s). Use 
 
 - **Scenarios:** `multi_channel_350` (arrivals spread over `arrival_window_seconds`, completion deadline
   applies) and `burst_350` (all units at t=0, measures drain time). Only one run may be active (HTTP 409).
-  *Stop Test* stops producing; queued jobs are never discarded.
+  _Stop Test_ stops producing; queued jobs are never discarded.
 - **Acceptance:** all target units `COMPLETED` and handed off within the deadline. Any `FAILED` /
   `MANUAL_REVIEW` unit fails it and stays visible. Whether 350-in-10-min is achievable depends on hardware and
   model size; the app only records measured results (throughput, P50/P95, queue wait, inference, persistence,
@@ -71,7 +71,7 @@ requests and queue wait counts against `AOB_MODEL_TIMEOUT` (default 120 s). Use 
   The model output is checkpointed; a resumed attempt skips completed durable work (shown as `SKIPPED`).
   Result + handoff outbox event are saved in one transaction; delivery is idempotent.
 - **Evidence:** the model returns verbatim quotes; offsets are computed by the app against stored segment
-  text. Unmatched quotes are shown as *Unverified evidence* and never highlighted.
+  text. Unmatched quotes are shown as _Unverified evidence_ and never highlighted.
 - **Recovery:** heartbeat + lease with a lease-version fencing check on every write; expired leases are
   re-claimed. Retries at ~5 s and ~15 s (+jitter, `AOB_RETRY_DELAYS`), then `FAILED`. Invalid JSON gets one
   repair re-inference, then `MANUAL_REVIEW`; resource exhaustion puts the worker in `BACKOFF`.
@@ -101,8 +101,8 @@ Streamlit (st.login, Auth0 Universal Login) --access token--> FastAPI /api/*  (J
 FastAPI --kaggle kernels push--> Kaggle GPU batch --HMAC-signed HTTPS POST--> FastAPI /api/events
 ```
 
-**1. Auth0** (dashboard): Regular Web Application with Universal Login; a Database Connection with *Disable
-Sign Ups* on and no social logins; an API with identifier e.g. `https://agent-ops-board-api` (RS256); callback
+**1. Auth0** (dashboard): Regular Web Application with Universal Login; a Database Connection with _Disable
+Sign Ups_ on and no social logins; an API with identifier e.g. `https://agent-ops-board-api` (RS256); callback
 `http://localhost:8501/oauth2callback` (use your HTTPS URL in production). Create users manually and give them
 temporary passwords. Copy each user's id (`auth0|…`) into `allowed_users.json` (see
 `allowed_users.example.json`; git-ignored). Set `"enabled": false` to revoke access immediately.
@@ -113,14 +113,14 @@ API identifier: the ID token must never be used for the API.
 
 **3. FastAPI environment**
 
-| Variable | Meaning |
-|---|---|
-| `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` | Tenant domain (`tenant.us.auth0.com`) and API identifier |
-| `AOB_ALLOWED_USERS_FILE` | Whitelist path (default `allowed_users.json`) |
-| `AOB_EVENT_SECRET` | Long random secret; per-run signing keys are derived from it |
-| `AOB_EVENTS_URL` | Public HTTPS URL of `/api/events` that Kaggle posts to |
-| `AOB_DEMO_MIN_INTERVAL`, `AOB_DEMO_MAX_RUNS_PER_DAY` | Per-user start cooldown (300 s) / daily cap (5) |
-| `AOB_KAGGLE_NOTEBOOK_DIR`, `AOB_KAGGLE_BIN` | Notebook folder (default `kaggle-notebook/`) and CLI binary |
+| Variable                                             | Meaning                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------ |
+| `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`                     | Tenant domain (`tenant.us.auth0.com`) and API identifier     |
+| `AOB_ALLOWED_USERS_FILE`                             | Whitelist path (default `allowed_users.json`)                |
+| `AOB_EVENT_SECRET`                                   | Long random secret; per-run signing keys are derived from it |
+| `AOB_EVENTS_URL`                                     | Public HTTPS URL of `/api/events` that Kaggle posts to       |
+| `AOB_DEMO_MIN_INTERVAL`, `AOB_DEMO_MAX_RUNS_PER_DAY` | Per-user start cooldown (300 s) / daily cap (5)              |
+| `AOB_KAGGLE_NOTEBOOK_DIR`, `AOB_KAGGLE_BIN`          | Notebook folder (default `kaggle-notebook/`) and CLI binary  |
 
 Kaggle CLI credentials (`~/.kaggle/kaggle.json` or `KAGGLE_USERNAME`/`KAGGLE_KEY`) live only on the API host.
 
@@ -139,13 +139,13 @@ master secret or any Auth0 credential.
 **5. Run and expose**: start the API and UI as above. Keep the API bound to localhost; the reverse proxy should
 publish **only** `POST /api/events` (the existing `/v1/*` routes are unauthenticated).
 
-| Endpoint | Auth |
-|---|---|
-| `GET /api/me` | Auth0 + whitelist (401 / 403 / 200) |
-| `POST /api/demo/start` | Auth0 + whitelist; 202 `{run_id, status: "submitting"}`, 409 if a batch is active, 429 when rate-limited |
-| `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/events?after_id=&types=` | Auth0 + owner of the run (404 otherwise); `after_id` is the server receive-order cursor |
-| `GET /api/demo/{run_id}/state`, `/metrics`, `/summary` | Same; live Workers/GPU/queue snapshot + timeline, time series, final evidence |
-| `POST /api/events` | `X-AOB-Timestamp` + `X-AOB-Signature: sha256=HMAC(run_key, "<ts>.<body>")`; deduplicated by `(run_id, event_id)` |
+| Endpoint                                                                                        | Auth                                                                                                             |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `GET /api/me`                                                                                   | Auth0 + whitelist (401 / 403 / 200)                                                                              |
+| `POST /api/demo/start`                                                                          | Auth0 + whitelist; 202 `{run_id, status: "submitting"}`, 409 if a batch is active, 429 when rate-limited         |
+| `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/events?after_id=&types=` | Auth0 + owner of the run (404 otherwise); `after_id` is the server receive-order cursor                          |
+| `GET /api/demo/{run_id}/state`, `/metrics`, `/summary`                                          | Same; live Workers/GPU/queue snapshot + timeline, time series, final evidence                                    |
+| `POST /api/events`                                                                              | `X-AOB-Timestamp` + `X-AOB-Signature: sha256=HMAC(run_key, "<ts>.<body>")`; deduplicated by `(run_id, event_id)` |
 
 The status response also carries `phase` (`initializing | loading_model | model_ready | validating | validated`,
 `null` until an event arrives, never guessed), `model`, `last_event_*` and `result`
