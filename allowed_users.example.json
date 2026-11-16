@@ -1,0 +1,6 @@
+{
+  "allowed_users": {
+    "auth0|REAL_USER_ID_1": {"username": "hiringmanager01", "enabled": true},
+    "auth0|REAL_USER_ID_2": {"username": "clientdemo01", "enabled": true}
+  }
+}

@@ -19,7 +19,9 @@ no external replies or account updates.
 | `orchestration/` | Handoff targets + mock orchestrator (idempotent by `event_id`) |
 | `loadtest/` | Scenarios, producer, metrics, `performance.csv` / `summary.json`, headless CLI |
 | `api/` | FastAPI endpoints (`/v1/...`, per the design) |
-| `dashboard/` | Streamlit: `app.py` (Dashboard), `pages/worker_monitor.py`, `pages/intake_unit_detail.py` |
+| `dashboard/` | Streamlit: `app.py` (Dashboard), `pages/worker_monitor.py`, `pages/intake_unit_detail.py`; `auth_gate.py` (Auth0 login), `live_demo.py` (Live GPU demo panel) |
+| `demo_*.py` | Private live demo: `demo_auth.py` (Auth0 JWT, whitelist, event signing), `demo_api.py` (`/api/*`), `demo_service.py` (run lifecycle), `demo_launcher.py` (Kaggle CLI), `demo_store.py` (SQLite `runtime/demo.db`) |
+| `kaggle-notebook/` | `kernel-metadata.json` for the Kaggle GPU batch (put the `.ipynb` here, see below) |
 | `runtime/` | `intake.db`, `raw/`, `attachments/`, `results/{test_run_id}/` (git-ignored) |
 
 ## Run
@@ -85,6 +87,66 @@ Streamlit cannot route `/workers/{id}`; pages use `/worker_monitor?worker_id=…
 `python -m pytest` (uses the mock model; covers evidence validation, leasing/fencing, crash recovery,
 retries, outbox, load-test fault run and API reads).
 
+## Private live demo (Auth0 + Kaggle GPU batch)
+
+Only Auth0 users that an admin created **and** listed in `allowed_users.json` can start the demo. There is no
+public sign-up. Login success, Kaggle submission and event delivery are three independent states:
+a valid login is not authorisation (the whitelist is checked by FastAPI on every request), a successful
+`kaggle kernels push` only means `queued` (never "GPU ready"), and an event is only recorded when it arrives.
+
+```
+Streamlit (st.login, Auth0 Universal Login) --access token--> FastAPI /api/*  (JWT + whitelist, SQLite runs/events)
+FastAPI --kaggle kernels push--> Kaggle GPU batch --HMAC-signed HTTPS POST--> FastAPI /api/events
+```
+
+**1. Auth0** (dashboard): Regular Web Application with Universal Login; a Database Connection with *Disable
+Sign Ups* on and no social logins; an API with identifier e.g. `https://agent-ops-board-api` (RS256); callback
+`http://localhost:8501/oauth2callback` (use your HTTPS URL in production). Create users manually and give them
+temporary passwords. Copy each user's id (`auth0|…`) into `allowed_users.json` (see
+`allowed_users.example.json`; git-ignored). Set `"enabled": false` to revoke access immediately.
+
+**2. Streamlit**: copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` (git-ignored). The UI is
+login-gated whenever an `[auth]` section exists (or `AOB_REQUIRE_LOGIN=1`). Verify the access token's `aud` is the
+API identifier: the ID token must never be used for the API.
+
+**3. FastAPI environment**
+
+| Variable | Meaning |
+|---|---|
+| `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` | Tenant domain (`tenant.us.auth0.com`) and API identifier |
+| `AOB_ALLOWED_USERS_FILE` | Whitelist path (default `allowed_users.json`) |
+| `AOB_EVENT_SECRET` | Long random secret; per-run signing keys are derived from it |
+| `AOB_EVENTS_URL` | Public HTTPS URL of `/api/events` that Kaggle posts to |
+| `AOB_DEMO_MIN_INTERVAL`, `AOB_DEMO_MAX_RUNS_PER_DAY` | Per-user start cooldown (300 s) / daily cap (5) |
+| `AOB_KAGGLE_NOTEBOOK_DIR`, `AOB_KAGGLE_BIN` | Notebook folder (default `kaggle-notebook/`) and CLI binary |
+
+Kaggle CLI credentials (`~/.kaggle/kaggle.json` or `KAGGLE_USERNAME`/`KAGGLE_KEY`) live only on the API host.
+
+**4. Notebook**: `kaggle kernels pull sillypanda5/notebookb061a06458 -p kaggle-notebook -m` and make sure
+`kernel-metadata.json` keeps the T4 GPU, internet, the two Datasets and `kernel_sources=[]`; save as UTF-8
+without BOM. On each start the launcher stages a copy whose first cell defines `AOB_RUN_ID`, `AOB_EVENTS_URL` and
+`aob_emit(event_type, payload)`. Replace the Webhook.site POSTs in the notebook with `aob_emit(...)` for
+`model_validation_started`, `worker_validation_completed`, `modelcheck_completed` and
+`model_validation_completed`. Send only counts, timings and status, never real PII or full prompts/responses.
+The notebook receives a key valid for its own run only, never the master secret or any Auth0 credential.
+
+**5. Run and expose**: start the API and UI as above. Keep the API bound to localhost; the reverse proxy should
+publish **only** `POST /api/events` (the existing `/v1/*` routes are unauthenticated).
+
+| Endpoint | Auth |
+|---|---|
+| `GET /api/me` | Auth0 + whitelist (401 / 403 / 200) |
+| `POST /api/demo/start` | Auth0 + whitelist; 202 `{run_id, status: "submitting"}`, 409 if a batch is active, 429 when rate-limited |
+| `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/events` | Auth0 + owner of the run (404 otherwise) |
+| `POST /api/events` | `X-AOB-Timestamp` + `X-AOB-Signature: sha256=HMAC(run_key, "<ts>.<body>")`; deduplicated by `(run_id, event_id)` |
+
+Run states: `submitting → queued → running → complete`, or `failed` / `cancelled`. Only one batch is active at a
+time (enforced in SQLite, so it survives restarts); Kaggle status is polled through the status endpoints, and runs
+stuck beyond `AOB_DEMO_MAX_RUN_SECONDS` (3 h) are failed so they cannot block the slot. Kaggle **batch** is not an
+always-on service: queue time is not guaranteed and the model is gone once the batch ends; runs and events stay
+queryable. Review Kaggle's usage policy and GPU quota before promising anything to a client.
+
 ## Not production
 
-No authentication/RBAC, encryption or retention; SQLite as queue; retry intervals are demo values.
+No RBAC beyond the live-demo whitelist, no encryption or retention; the `/v1/*` API is unauthenticated (keep it
+on localhost); SQLite as queue; retry intervals are demo values.

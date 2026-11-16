@@ -5,10 +5,13 @@ import pandas as pd
 import streamlit as st
 
 import api_client
+import live_demo
 import ui
 
-ui.page_header("Agent Ops Board")
+token = ui.page_header("Agent Ops Board")
 ui.inject_area_css()
+if token:
+    live_demo.render(token)
 
 STATUSES = ["PENDING", "RUNNING", "WAITING_RETRY", "COMPLETED", "FAILED", "MANUAL_REVIEW"]
 INTENTS = ["PAYMENT_VERIFICATION", "DEBT_DISPUTE", "PAYMENT_ARRANGEMENT", "HARDSHIP_NOTIFICATION",

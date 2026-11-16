@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 import config
+import demo_api
 from api import queries
 from intake.service import submit_unit
 from loadtest import runner
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agent Ops Board API", version="1.0", lifespan=lifespan)
+app.include_router(demo_api.router)
 
 
 def get_conn():

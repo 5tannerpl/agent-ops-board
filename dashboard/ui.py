@@ -4,6 +4,7 @@ import datetime as dt
 import streamlit as st
 
 import api_client
+import auth_gate
 
 STATUS_ICON = {
     "COMPLETED": "🟢", "RUNNING": "🔵", "PENDING": "⚪", "WAITING_RETRY": "🟠", "FAILED": "🔴",
@@ -43,10 +44,12 @@ def api_guard(fn, *args, **kwargs):
         st.stop()
 
 
-def page_header(title: str) -> None:
+def page_header(title: str) -> str | None:
+    """Page chrome plus the Auth0 login gate; returns the API access token (None if login is disabled)."""
     st.set_page_config(page_title=f"Agent Ops Board — {title}", layout="wide", page_icon="🛰️")
     st.title(title)
     st.caption("🧪 **Synthetic Demo** — synthetic, non-confidential content. No account updates or external replies.")
+    return auth_gate.require_login()
 
 
 def open_unit(unit_id: str) -> None:

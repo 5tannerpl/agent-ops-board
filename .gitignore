@@ -219,6 +219,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Live demo whitelist (real Auth0 user ids)
+allowed_users.json
+
 # Agent Ops Board runtime state
 runtime/*
 !runtime/.gitkeep

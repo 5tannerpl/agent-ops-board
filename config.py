@@ -48,3 +48,29 @@ STEPS = [
     "HANDOFF",
 ]
 TERMINAL_STATUSES = ("COMPLETED", "FAILED", "MANUAL_REVIEW")
+
+# ---- Private live demo (Auth0 + Kaggle GPU batch) ------------------------------------------
+AUTH0_DOMAIN = os.environ.get("AUTH0_DOMAIN", "")
+AUTH0_AUDIENCE = os.environ.get("AUTH0_AUDIENCE", "")
+ALLOWED_USERS_FILE = Path(os.environ.get("AOB_ALLOWED_USERS_FILE", ROOT / "allowed_users.json"))
+DEMO_DB_PATH = Path(os.environ.get("AOB_DEMO_DB_PATH", RUNTIME_DIR / "demo.db"))
+
+# Kaggle -> FastAPI events. Each run gets its own signing key derived from this secret.
+EVENT_SECRET = os.environ.get("AOB_EVENT_SECRET", "")
+EVENTS_PUBLIC_URL = os.environ.get("AOB_EVENTS_URL", "")  # e.g. https://demo.example.com/api/events
+EVENT_MAX_BYTES = 64 * 1024
+EVENT_MAX_SKEW_SECONDS = 300
+EVENT_MAX_PER_RUN = 1000
+
+KAGGLE_BIN = os.environ.get("AOB_KAGGLE_BIN", "kaggle")
+KAGGLE_NOTEBOOK_DIR = Path(os.environ.get("AOB_KAGGLE_NOTEBOOK_DIR", ROOT / "kaggle-notebook"))
+KAGGLE_ACCELERATOR = os.environ.get("AOB_KAGGLE_ACCELERATOR", "NvidiaTeslaT4")
+KAGGLE_PUSH_TIMEOUT = float(os.environ.get("AOB_KAGGLE_PUSH_TIMEOUT", "120"))
+
+DEMO_MIN_INTERVAL_SECONDS = float(os.environ.get("AOB_DEMO_MIN_INTERVAL", "300"))  # per user
+DEMO_MAX_RUNS_PER_DAY = int(os.environ.get("AOB_DEMO_MAX_RUNS_PER_DAY", "5"))  # per user
+DEMO_MAX_RUN_SECONDS = float(os.environ.get("AOB_DEMO_MAX_RUN_SECONDS", str(3 * 3600)))
+DEMO_SUBMIT_TIMEOUT_SECONDS = KAGGLE_PUSH_TIMEOUT + 60
+DEMO_SYNC_INTERVAL_SECONDS = float(os.environ.get("AOB_DEMO_SYNC_INTERVAL", "15"))
+# A terminal Kaggle status seen this soon after a push may belong to the previous notebook version.
+DEMO_STALE_STATUS_GRACE_SECONDS = float(os.environ.get("AOB_DEMO_STALE_GRACE", "120"))

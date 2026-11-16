@@ -1,0 +1,17 @@
+{
+  "id": "sillypanda5/notebookb061a06458",
+  "title": "notebookb061a06458",
+  "code_file": "notebookb061a06458.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "true",
+  "dataset_sources": [
+    "sillypanda5/agent-ops-qwen-model",
+    "sillypanda5/agent-ops-llama-cuda-t4"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

@@ -68,3 +68,28 @@ def stop_load_test(run_id: str) -> dict:
 
 def submit_message(**body) -> dict:
     return _request("POST", "/v1/messages", json=body)
+
+
+# ---- Private live demo (Auth0 access token required) ----------------------------------------------
+def _bearer(token: str) -> dict:
+    return {"headers": {"Authorization": f"Bearer {token}"}}
+
+
+def me(token: str) -> dict:
+    return _request("GET", "/api/me", **_bearer(token))
+
+
+def demo_start(token: str) -> dict:
+    return _request("POST", "/api/demo/start", **_bearer(token))
+
+
+def demo_runs(token: str) -> list[dict]:
+    return _request("GET", "/api/demo/runs", **_bearer(token))["items"]
+
+
+def demo_status(token: str, run_id: str) -> dict:
+    return _request("GET", f"/api/demo/{run_id}/status", **_bearer(token))
+
+
+def demo_events(token: str, run_id: str) -> list[dict]:
+    return _request("GET", f"/api/demo/{run_id}/events", params={"limit": 500}, **_bearer(token))["items"]
