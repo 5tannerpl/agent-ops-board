@@ -21,6 +21,8 @@ no external replies or account updates.
 | `api/` | FastAPI endpoints (`/v1/...`, per the design) |
 | `dashboard/` | Streamlit: `app.py` (Dashboard), `pages/worker_monitor.py`, `pages/intake_unit_detail.py`; `auth_gate.py` (Auth0 login), `live_demo.py` (Live GPU demo panel) |
 | `demo_*.py` | Private live demo: `demo_auth.py` (Auth0 JWT, whitelist, event signing), `demo_api.py` (`/api/*`), `demo_service.py` (run lifecycle), `kaggle_launcher.py` (Kaggle CLI), `demo_store.py` (SQLite `runtime/demo.db`) |
+| `scaling/` | Autoscaling live demo (runs inside the Kaggle batch): `autoscaler.py`, `policy.py`, `gpu_manager.py`, `inference_router.py` (`:8090`), `scenario.py`, `events.py`, `bootstrap.py` |
+| `demo_scaling.py` | Read models behind `/state`, `/metrics`, `/summary` |
 | `kaggle-notebook/` | `kernel-metadata.json` for the Kaggle GPU batch (put the `.ipynb` here, see below) |
 | `runtime/` | `intake.db`, `raw/`, `attachments/`, `results/{test_run_id}/` (git-ignored) |
 
@@ -141,7 +143,8 @@ publish **only** `POST /api/events` (the existing `/v1/*` routes are unauthentic
 |---|---|
 | `GET /api/me` | Auth0 + whitelist (401 / 403 / 200) |
 | `POST /api/demo/start` | Auth0 + whitelist; 202 `{run_id, status: "submitting"}`, 409 if a batch is active, 429 when rate-limited |
-| `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/events` | Auth0 + owner of the run (404 otherwise) |
+| `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/events?after_id=&types=` | Auth0 + owner of the run (404 otherwise); `after_id` is the server receive-order cursor |
+| `GET /api/demo/{run_id}/state`, `/metrics`, `/summary` | Same; live Workers/GPU/queue snapshot + timeline, time series, final evidence |
 | `POST /api/events` | `X-AOB-Timestamp` + `X-AOB-Signature: sha256=HMAC(run_key, "<ts>.<body>")`; deduplicated by `(run_id, event_id)` |
 
 The status response also carries `phase` (`initializing | loading_model | model_ready | validating | validated`,
@@ -154,6 +157,34 @@ time (enforced in SQLite, so it survives restarts); Kaggle status is polled thro
 stuck beyond `AOB_DEMO_MAX_RUN_SECONDS` (3 h) are failed so they cannot block the slot. Kaggle **batch** is not an
 always-on service: queue time is not guaranteed and the model is gone once the batch ends; runs and events stay
 queryable. Review Kaggle's usage policy and GPU quota before promising anything to a client.
+
+## Worker + GPU autoscaling live demo
+
+`POST /api/demo/start` takes `{"mode": "light" | "high_concurrency", "units": 50 | 100 | 150}` (units only for
+`high_concurrency`, default 100; `light` is fixed at 10 tasks / 2 workers / 1 GPU). The launcher adds `AOB_DEMO_MODE` /
+`AOB_DEMO_UNITS` to the staged prelude and appends one last cell (marker `# AOB scaling demo bootstrap`) that runs
+`scaling.bootstrap.run(globals())` from the cloned repository, **after** the original five validation events. The
+earlier cells are not changed, and an existing GPU 0 `llama-server` on `:8080` is adopted if it is isolated on
+CUDA 0 (otherwise it is restarted, or the run fails with `GPU0_NOT_ISOLATED`).
+
+What really happens inside the batch: GPU 0 `llama-server :8080` -> inference router `:8090` (workers use
+`AOB_MODEL_URL=http://127.0.0.1:8090`) -> SQLite queue + `workers.supervisor` (2 real worker processes) ->
+synthetic burst -> `Autoscaler` (single writer of `desired_workers`: 2 -> 4 -> 8 by queue depth, one tier per
+decision; back to 2 only after the queue is idle for 15 s) -> GPU 1 `llama-server :8081 --device CUDA1` started
+after >= 4 workers and a sustained backlog, joins the router only after its own `/health` is 200, is drained
+(in-flight = 0) and stopped when idle. Thresholds live in `scaling/settings.py`.
+
+New events (same envelope, `payload` carries the data): `scaling_demo_started`, `scaling_metrics_snapshot` (every
+3 s), `worker_scaling_requested` / `worker_scaling_completed`, `gpu_instance_starting` / `_ready` / `_failed` /
+`_draining` / `_stopped`, `inference_route_changed`, `scaling_demo_completed`, `scaling_demo_failed`. Actual workers
+are live PIDs with fresh heartbeats; GPU requests are router completion counters. The verdict (`passed | degraded |
+failed`) is computed from that evidence (levels 4 and 8 confirmed, requests on both GPUs, GPU 1 stopped cleanly,
+final 2 workers + 1 instance) and never from the Kaggle batch status or the model validation result. A missing
+measurement is `null`/`N/A`; one-GPU batches report `GPU_UNAVAILABLE` as `degraded`.
+
+Not covered: this is telemetry of a batch, not a customer-facing inference service, and "1 GPU instance" means one
+model process, not fewer Kaggle GPUs. Nothing here has been executed on real Kaggle T4s; run High Concurrency with
+50/100/150 tasks once and check the evidence table before presenting results.
 
 ## Not production
 

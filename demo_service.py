@@ -2,6 +2,7 @@
 import logging
 
 import config
+import demo_scaling
 import kaggle_launcher
 import demo_store as store
 from storage import db
@@ -42,20 +43,22 @@ def summarize_run(conn, run: dict) -> dict:
         result = "pending"
     return {"phase": phase, "last_event_type": events[-1]["event_type"] if events else None,
             "last_event_at": events[-1]["received_at"] if events else None, "result": result,
-            "model": MODEL_NAME, "event_count": len(events)}
+            "model": MODEL_NAME, "event_count": len(events), "mode": run.get("mode"), "units": run.get("units"),
+            "scaling_status": demo_scaling.status_of(run, events)}
 
 
-def start_run(conn, owner_sub: str) -> dict:
+def start_run(conn, owner_sub: str, mode: str = "light", units: int | None = None) -> dict:
     """Create a ``submitting`` run. Raises store.Conflict / store.RateLimited."""
     sync_active(conn, force=True)  # free the single slot if the previous batch already finished
-    return store.create_run(conn, owner_sub)
+    return store.create_run(conn, owner_sub, mode, units)
 
 
 def submit_run(run_id: str) -> None:
     """Push to Kaggle (blocking; run in the background). A successful push only means ``queued``."""
     conn = store.connect()
     try:
-        kaggle_launcher.submit(run_id)
+        run = store.get_run(conn, run_id) or {}
+        kaggle_launcher.submit(run_id, run.get("mode") or "light", run.get("units"))
         store.advance(conn, run_id, "queued")
     except kaggle_launcher.LaunchError as exc:
         store.finish(conn, run_id, "failed", str(exc))

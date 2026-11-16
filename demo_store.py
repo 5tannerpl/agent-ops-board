@@ -50,6 +50,13 @@ class RateLimited(Exception):
 def connect() -> sqlite3.Connection:
     conn = db.connect(config.DEMO_DB_PATH)
     conn.executescript(SCHEMA)
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(demo_runs)")}
+    for name, ddl in (("mode", "TEXT"), ("units", "INTEGER")):  # added after the first release
+        if name not in columns:
+            try:
+                conn.execute(f"ALTER TABLE demo_runs ADD COLUMN {name} {ddl}")
+            except sqlite3.OperationalError:
+                pass  # another connection migrated first
     return conn
 
 
@@ -70,7 +77,7 @@ def active_runs(conn) -> list[dict]:
         f"SELECT * FROM demo_runs WHERE status IN ({marks}) ORDER BY created_at", ACTIVE)]
 
 
-def create_run(conn, owner_sub: str) -> dict:
+def create_run(conn, owner_sub: str, mode: str = "light", units: int | None = None) -> dict:
     """Atomically enforce one global active run plus per-user cooldown and daily cap."""
     now = db.now()
     with db.tx(conn):
@@ -86,8 +93,8 @@ def create_run(conn, owner_sub: str) -> dict:
         if today >= config.DEMO_MAX_RUNS_PER_DAY:
             raise RateLimited("Daily demo limit reached.", 3600)
         run_id = f"run-{secrets.token_hex(8)}"
-        conn.execute("INSERT INTO demo_runs(run_id, owner_sub, status, created_at, updated_at) "
-                     "VALUES(?, ?, 'submitting', ?, ?)", (run_id, owner_sub, now, now))
+        conn.execute("INSERT INTO demo_runs(run_id, owner_sub, status, created_at, updated_at, mode, units) "
+                     "VALUES(?, ?, 'submitting', ?, ?, ?, ?)", (run_id, owner_sub, now, now, mode, units))
     return get_run(conn, run_id)
 
 
@@ -132,7 +139,11 @@ def count_events(conn, run_id: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM demo_events WHERE run_id=?", (run_id,)).fetchone()[0]
 
 
-def list_events(conn, run_id: str, after_id: int = 0, limit: int = 200) -> list[dict]:
+def list_events(conn, run_id: str, after_id: int = 0, limit: int = 200,
+                event_types: tuple[str, ...] | None = None) -> list[dict]:
+    """Events in server receive order (the cursor); client timestamps are never used for ordering."""
+    marks = f" AND event_type IN ({','.join('?' * len(event_types))})" if event_types else ""
     rows = conn.execute("SELECT id, event_id, event_type, payload, event_ts, received_at FROM demo_events "
-                        "WHERE run_id=? AND id>? ORDER BY id LIMIT ?", (run_id, after_id, limit))
+                        f"WHERE run_id=? AND id>?{marks} ORDER BY id LIMIT ?",
+                        (run_id, after_id, *(event_types or ()), limit))
     return [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]

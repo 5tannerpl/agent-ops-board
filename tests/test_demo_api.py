@@ -43,7 +43,7 @@ def demo(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEMO_MIN_INTERVAL_SECONDS", 0)
     monkeypatch.setattr(demo_auth, "signing_key", lambda _t: KEY.public_key())
     pushed, status = [], {"value": "queued"}
-    monkeypatch.setattr(kaggle_launcher, "submit", pushed.append)
+    monkeypatch.setattr(kaggle_launcher, "submit", lambda run_id, mode="light", units=None: pushed.append(run_id))
     monkeypatch.setattr(kaggle_launcher, "kernel_status", lambda: status["value"])
     client = TestClient(app)
     client.pushed, client.kaggle = pushed, status
@@ -113,7 +113,7 @@ def test_stale_terminal_status_right_after_push_is_ignored(demo):
 
 
 def test_failed_submission_marks_run_failed(demo, monkeypatch):
-    def boom(_run_id):
+    def boom(_run_id, *_):
         raise kaggle_launcher.LaunchError("kaggle kernels push failed: nope")
     monkeypatch.setattr(kaggle_launcher, "submit", boom)
     run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]

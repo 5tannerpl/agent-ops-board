@@ -1,6 +1,7 @@
 """Live-demo HTTP API: Auth0-protected start/status/events plus the signed Kaggle event ingest."""
 import json
 import re
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -8,6 +9,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 import config
 import demo_auth
+import demo_scaling
 import demo_service
 import demo_store as store
 
@@ -26,8 +28,8 @@ def get_conn():
 
 def run_view(run: dict) -> dict:
     return {"run_id": run["run_id"], "status": run["status"], "kaggle_status": run["kaggle_status"],
-            "error": run["error"], "created_at": run["created_at"], "updated_at": run["updated_at"],
-            "finished_at": run["finished_at"]}
+            "error": run["error"], "mode": run.get("mode"), "units": run.get("units"),
+            "created_at": run["created_at"], "updated_at": run["updated_at"], "finished_at": run["finished_at"]}
 
 
 def owned_run(conn, run_id: str, user: dict) -> dict:
@@ -43,11 +45,20 @@ def me(user: dict = Depends(demo_auth.require_demo_access)):
     return {"user_id": user["sub"], "can_start_demo": True}
 
 
+class StartIn(BaseModel):
+    mode: Literal["light", "high_concurrency"] = "light"
+    units: Literal[50, 100, 150] | None = None  # high_concurrency only; light always uses its fixed size
+
+
 @router.post("/api/demo/start", status_code=202)
-def start_demo(background: BackgroundTasks, user: dict = Depends(demo_auth.require_demo_access),
-               conn=Depends(get_conn)):
+def start_demo(background: BackgroundTasks, body: StartIn | None = None,
+               user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    body = body or StartIn()
+    if body.mode == "light" and body.units is not None:
+        raise HTTPException(422, "units can only be chosen for high_concurrency")
+    units = body.units or (100 if body.mode == "high_concurrency" else 10)
     try:
-        run = demo_service.start_run(conn, user["sub"])
+        run = demo_service.start_run(conn, user["sub"], body.mode, units)
     except store.Conflict as exc:
         raise HTTPException(409, "A demo is already queued or running", headers={"X-Active-Run": exc.run_id})
     except store.RateLimited as exc:
@@ -68,11 +79,29 @@ def run_status(run_id: str, user: dict = Depends(demo_auth.require_demo_access),
     return {**run_view(run), **demo_service.summarize_run(conn, run)}
 
 
+@router.get("/api/demo/{run_id}/state")
+def run_state(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    run = owned_run(conn, run_id, user)
+    return {**run_view(run), **demo_scaling.state(conn, run)}
+
+
+@router.get("/api/demo/{run_id}/metrics")
+def run_metrics(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    return demo_scaling.metrics(conn, owned_run(conn, run_id, user))
+
+
+@router.get("/api/demo/{run_id}/summary")
+def run_summary(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    return demo_scaling.summary(conn, owned_run(conn, run_id, user))
+
+
 @router.get("/api/demo/{run_id}/events")
 def run_events(run_id: str, after_id: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=500),
+               types: str | None = Query(None, max_length=1000, description="comma-separated event types"),
                user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     owned_run(conn, run_id, user)
-    return {"items": store.list_events(conn, run_id, after_id, limit)}
+    wanted = tuple(t for t in (types or "").split(",") if re.match(_EVENT_TYPE, t)) or None
+    return {"items": store.list_events(conn, run_id, after_id, limit, wanted)}
 
 
 class EventIn(BaseModel):

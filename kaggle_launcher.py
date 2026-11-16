@@ -27,6 +27,9 @@ KAGGLE_STATUS_MAP = {
 }
 _STATUS_RE = re.compile(r'has status "(?:KernelWorkerStatus\.)?([A-Za-z_]+)"')
 _RUN_RE = re.compile(r"^run-[0-9a-f]{16}$")
+_REPO_URL_RE = re.compile(r"^https://[A-Za-z0-9._~/-]+(\.git)?$")
+DEMO_MODES = ("light", "high_concurrency")
+SCALING_CELL_MARKER = "# AOB scaling demo bootstrap"
 log = logging.getLogger("kaggle_launcher")
 # Matches the raw-body HMAC contract in demo_auth.verify_event().
 PRELUDE_BODY = '''import hashlib, hmac, json, time, urllib.request, uuid
@@ -60,6 +63,24 @@ def aob_emit(event_type, payload=None):
 '''
 
 
+def render_scaling_cell() -> str:
+    """Last notebook cell: runs the Worker + GPU autoscaling experiment from the cloned repository."""
+    repo_url = os.getenv("AOB_REPO_URL", "https://github.com/5tannerpl/agent-ops-board.git")
+    if not _REPO_URL_RE.fullmatch(repo_url):
+        raise LaunchError("AOB_REPO_URL must be a plain https URL")
+    return (f"{SCALING_CELL_MARKER}\n"
+            "import subprocess, sys\n"
+            "from pathlib import Path\n"
+            "_aob_candidates = (globals().get('REPO_DIR'), '/kaggle/working/agent-repo', '/kaggle/working/aob-scaling-repo')\n"
+            "_aob_repo = next((Path(p) for p in _aob_candidates if p and (Path(p) / 'scaling' / 'bootstrap.py').is_file()), None)\n"
+            "if _aob_repo is None:\n"
+            "    _aob_repo = Path('/kaggle/working/aob-scaling-repo')\n"
+            f"    subprocess.run(['git', 'clone', '--depth', '1', {repo_url!r}, str(_aob_repo)], check=True)\n"
+            "sys.path.insert(0, str(_aob_repo))\n"
+            "from scaling import bootstrap\n"
+            "AOB_SCALING_SUMMARY = bootstrap.run(globals())\n")
+
+
 class LaunchError(Exception):
     """Launcher input, Kaggle CLI or notebook staging failure."""
 
@@ -72,15 +93,21 @@ def kernel_ref() -> str:
     return ref
 
 
-def render_prelude(run_id: str) -> str:
+def render_prelude(run_id: str, mode: str = "light", units: int | None = None) -> str:
     if not _RUN_RE.fullmatch(run_id):
         raise LaunchError("Invalid run ID")
+    if mode not in DEMO_MODES:
+        raise LaunchError("Invalid demo mode")
+    if units is not None and (isinstance(units, bool) or not isinstance(units, int) or not 1 <= units <= 500):
+        raise LaunchError("Invalid demo unit count")
     if not config.EVENT_SECRET or not config.EVENTS_PUBLIC_URL:
         raise LaunchError("AOB_EVENT_SECRET and AOB_EVENTS_URL must be configured")
     if not config.EVENTS_PUBLIC_URL.startswith("https://"):
         raise LaunchError("AOB_EVENTS_URL must be a public HTTPS endpoint")
     return ("# Staged by Agent Ops Board. PRIVATE notebook only.\n"
             f"AOB_RUN_ID = {run_id!r}\n"
+            f"AOB_DEMO_MODE = {mode!r}\n"
+            f"AOB_DEMO_UNITS = {units if mode == 'high_concurrency' else None!r}\n"
             f"AOB_EVENTS_URL = {config.EVENTS_PUBLIC_URL!r}\n"
             f"_AOB_KEY = {demo_auth.run_event_key(run_id)!r}\n"
             + PRELUDE_BODY)
@@ -203,7 +230,7 @@ def ensure_step6_counters(source: str) -> str:
 
 
 
-def stage_notebook(run_id: str, target: Path) -> None:
+def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | None = None) -> None:
     """Pull latest verified Notebook, add signed event adapter and stage for Push."""
     target.mkdir(parents=True, exist_ok=True)
     _cli_checked(["kernels", "pull", kernel_ref(), "-m", "-p", str(target)],
@@ -232,6 +259,8 @@ def stage_notebook(run_id: str, target: Path) -> None:
         if notebook["cells"] and _source(notebook["cells"][0]).strip() == \
                 'aob_emit("notebook_started", {"status": "running"})':
             notebook["cells"].pop(0)
+    # A previously staged scaling cell is replaced, never duplicated.
+    notebook["cells"] = [c for c in notebook["cells"] if not _source(c).startswith(SCALING_CELL_MARKER)]
     if any("AOB_RUN_ID = " in _source(c) for c in notebook["cells"]):
         raise LaunchError("Notebook still contains another run credential cell")
 
@@ -264,8 +293,9 @@ def stage_notebook(run_id: str, target: Path) -> None:
             "no changes submitted. Inspect the original Kaggle Notebook.")
 
     # Report when the notebook actually starts; no claims of readiness before /health.
-    notebook["cells"].insert(0, _code_cell(render_prelude(run_id)))
+    notebook["cells"].insert(0, _code_cell(render_prelude(run_id, mode, units)))
     notebook["cells"].insert(1, _code_cell('aob_emit("notebook_started", {"status": "running"})\n'))
+    notebook["cells"].append(_code_cell(render_scaling_cell()))
     for cell in notebook["cells"]:
         if cell.get("cell_type") == "code":
             cell["execution_count"] = None
@@ -327,14 +357,14 @@ def stage_notebook(run_id: str, target: Path) -> None:
 
 
 
-def submit(run_id: str) -> None:
+def submit(run_id: str, mode: str = "light", units: int | None = None) -> None:
     """Submit a Kaggle batch and log final metadata before Push."""
 
     with tempfile.TemporaryDirectory(prefix="aob-kaggle-") as tmp:
         target = Path(tmp)
 
         # 1. Pull → Adapt → Remove docker_image → Stage
-        stage_notebook(run_id, target)
+        stage_notebook(run_id, target, mode, units)
 
         # 2. Read the actual metadata prepared for Push
         metadata_file = target / "kernel-metadata.json"
