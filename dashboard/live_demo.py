@@ -6,6 +6,11 @@ import api_client
 import ui
 
 ACTIVE = ("submitting", "queued", "running")
+PHASE_TEXT = {None: "Initializing — no detailed progress reported yet", "initializing": "Initializing notebook",
+              "loading_model": "Loading model", "model_ready": "Model server ready (/health 200)",
+              "validating": "Running real model validation", "validated": "Validation finished"}
+RESULT_TEXT = {"pending": "⏳ Pending", "passed": "✅ Passed", "failed": "❌ Failed",
+               "incomplete": "⚠️ Incomplete — Kaggle finished but no passing validation event was received"}
 
 
 def _events_table(token: str, run_id: str) -> None:
@@ -43,7 +48,7 @@ def render(token: str) -> None:
 
 
 def _run_panel(token: str, run_id: str, active: bool) -> None:
-    @st.fragment(run_every=5 if active else None)
+    @st.fragment(run_every=3 if active else None)
     def panel() -> None:
         try:
             status = api_client.demo_status(token, run_id)
@@ -56,6 +61,11 @@ def _run_panel(token: str, run_id: str, active: bool) -> None:
                 "failed": "🔴", "cancelled": "⚫"}.get(status["status"], "•")
         st.markdown(f"{icon} **{status['status']}** · Kaggle: `{status['kaggle_status'] or '—'}` · "
                     f"events: {status['event_count']} · started {ui.fmt_ts(status['created_at'])}")
+        if status["status"] == "queued":
+            st.caption("Waiting for Kaggle to schedule the GPU batch; queue time is not guaranteed.")
+        elif status["status"] == "running":
+            st.caption(f"Phase: {PHASE_TEXT.get(status['phase'], status['phase'])}")
+        st.markdown(f"Model: `{status['model']}` · Validation result: {RESULT_TEXT[status['result']]}")
         if status["error"]:
             st.error(status["error"])
         _events_table(token, run_id)

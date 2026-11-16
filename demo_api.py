@@ -65,7 +65,7 @@ def list_runs(user: dict = Depends(demo_auth.require_demo_access), conn=Depends(
 @router.get("/api/demo/{run_id}/status")
 def run_status(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     run = owned_run(conn, run_id, user)
-    return {**run_view(run), "event_count": store.count_events(conn, run_id)}
+    return {**run_view(run), **demo_service.summarize_run(conn, run)}
 
 
 @router.get("/api/demo/{run_id}/events")

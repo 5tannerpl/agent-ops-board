@@ -20,7 +20,7 @@ no external replies or account updates.
 | `loadtest/` | Scenarios, producer, metrics, `performance.csv` / `summary.json`, headless CLI |
 | `api/` | FastAPI endpoints (`/v1/...`, per the design) |
 | `dashboard/` | Streamlit: `app.py` (Dashboard), `pages/worker_monitor.py`, `pages/intake_unit_detail.py`; `auth_gate.py` (Auth0 login), `live_demo.py` (Live GPU demo panel) |
-| `demo_*.py` | Private live demo: `demo_auth.py` (Auth0 JWT, whitelist, event signing), `demo_api.py` (`/api/*`), `demo_service.py` (run lifecycle), `demo_launcher.py` (Kaggle CLI), `demo_store.py` (SQLite `runtime/demo.db`) |
+| `demo_*.py` | Private live demo: `demo_auth.py` (Auth0 JWT, whitelist, event signing), `demo_api.py` (`/api/*`), `demo_service.py` (run lifecycle), `kaggle_launcher.py` (Kaggle CLI), `demo_store.py` (SQLite `runtime/demo.db`) |
 | `kaggle-notebook/` | `kernel-metadata.json` for the Kaggle GPU batch (put the `.ipynb` here, see below) |
 | `runtime/` | `intake.db`, `raw/`, `attachments/`, `results/{test_run_id}/` (git-ignored) |
 
@@ -122,13 +122,17 @@ API identifier: the ID token must never be used for the API.
 
 Kaggle CLI credentials (`~/.kaggle/kaggle.json` or `KAGGLE_USERNAME`/`KAGGLE_KEY`) live only on the API host.
 
-**4. Notebook**: `kaggle kernels pull sillypanda5/notebookb061a06458 -p kaggle-notebook -m` and make sure
-`kernel-metadata.json` keeps the T4 GPU, internet, the two Datasets and `kernel_sources=[]`; save as UTF-8
-without BOM. On each start the launcher stages a copy whose first cell defines `AOB_RUN_ID`, `AOB_EVENTS_URL` and
-`aob_emit(event_type, payload)`. Replace the Webhook.site POSTs in the notebook with `aob_emit(...)` for
-`model_validation_started`, `worker_validation_completed`, `modelcheck_completed` and
-`model_validation_completed`. Send only counts, timings and status, never real PII or full prompts/responses.
-The notebook receives a key valid for its own run only, never the master secret or any Auth0 credential.
+**4. Notebook**: [kaggle-notebook/notebookb061a06458.ipynb](kaggle-notebook/notebookb061a06458.ipynb) holds
+Steps 1-6 (clone, deps, restore CUDA `llama-server`, locate Qwen3-4B GGUF, start server + `/health` 200, real
+`workers.check_model` + `modelcheck.py`). If you maintain the notebook on Kaggle, `kaggle kernels pull
+sillypanda5/notebookb061a06458 -p kaggle-notebook -m` and keep the `aob_emit(...)` calls. Check that Steps 3-4
+match your Dataset layouts, and keep `kernel-metadata.json` on the T4 GPU, internet, the two Datasets and
+`kernel_sources=[]`, without `docker_image`, saved as UTF-8 without BOM. On each start the launcher stages a copy
+whose first cell defines `AOB_RUN_ID`, `AOB_EVENTS_URL` and `aob_emit(event_type, payload)`. Events:
+`notebook_started`, `environment_ready`, `model_located`, `model_ready`, `model_validation_started`,
+`worker_validation_completed`, `modelcheck_completed`, `model_validation_completed`. Send only counts, timings and
+status, never real PII or full prompts/responses. The notebook receives a key valid for its own run only, never the
+master secret or any Auth0 credential.
 
 **5. Run and expose**: start the API and UI as above. Keep the API bound to localhost; the reverse proxy should
 publish **only** `POST /api/events` (the existing `/v1/*` routes are unauthenticated).
@@ -139,6 +143,11 @@ publish **only** `POST /api/events` (the existing `/v1/*` routes are unauthentic
 | `POST /api/demo/start` | Auth0 + whitelist; 202 `{run_id, status: "submitting"}`, 409 if a batch is active, 429 when rate-limited |
 | `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/events` | Auth0 + owner of the run (404 otherwise) |
 | `POST /api/events` | `X-AOB-Timestamp` + `X-AOB-Signature: sha256=HMAC(run_key, "<ts>.<body>")`; deduplicated by `(run_id, event_id)` |
+
+The status response also carries `phase` (`initializing | loading_model | model_ready | validating | validated`,
+`null` until an event arrives, never guessed), `model`, `last_event_*` and `result`
+(`pending | passed | failed | incomplete`). Kaggle `complete` without the final passing
+`model_validation_completed` event is `incomplete`, not a pass.
 
 Run states: `submitting → queued → running → complete`, or `failed` / `cancelled`. Only one batch is active at a
 time (enforced in SQLite, so it survives restarts); Kaggle status is polled through the status endpoints, and runs

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import config
 import demo_auth
-import demo_launcher
+import kaggle_launcher
 import demo_service
 import demo_store as store
 from api.main import app
@@ -43,8 +43,8 @@ def demo(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEMO_MIN_INTERVAL_SECONDS", 0)
     monkeypatch.setattr(demo_auth, "signing_key", lambda _t: KEY.public_key())
     pushed, status = [], {"value": "queued"}
-    monkeypatch.setattr(demo_launcher, "submit", pushed.append)
-    monkeypatch.setattr(demo_launcher, "kernel_status", lambda: status["value"])
+    monkeypatch.setattr(kaggle_launcher, "submit", pushed.append)
+    monkeypatch.setattr(kaggle_launcher, "kernel_status", lambda: status["value"])
     client = TestClient(app)
     client.pushed, client.kaggle = pushed, status
     return client
@@ -114,8 +114,8 @@ def test_stale_terminal_status_right_after_push_is_ignored(demo):
 
 def test_failed_submission_marks_run_failed(demo, monkeypatch):
     def boom(_run_id):
-        raise demo_launcher.LaunchError("kaggle kernels push failed: nope")
-    monkeypatch.setattr(demo_launcher, "submit", boom)
+        raise kaggle_launcher.LaunchError("kaggle kernels push failed: nope")
+    monkeypatch.setattr(kaggle_launcher, "submit", boom)
     run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
     status = demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()
     assert status["status"] == "failed" and "nope" in status["error"]
@@ -185,7 +185,7 @@ def test_notebook_staging_injects_run_config_without_the_master_secret(demo, tmp
                                               "nbformat": 4, "nbformat_minor": 5}))
     monkeypatch.setattr(config, "KAGGLE_NOTEBOOK_DIR", src)
     out = tmp_path / "staged"
-    demo_launcher.stage_notebook("run-0123456789abcdef", out)
+    kaggle_launcher.stage_notebook("run-0123456789abcdef", out)
     raw = (out / "nb.ipynb").read_bytes()
     assert not raw.startswith(b"\xef\xbb\xbf")
     first = "".join(json.loads(raw)["cells"][0]["source"])
@@ -202,3 +202,34 @@ def test_submitting_run_without_progress_times_out(demo, monkeypatch):
     monkeypatch.setattr(config, "DEMO_SUBMIT_TIMEOUT_SECONDS", -1)
     assert demo_service.sync_run(conn, run)["status"] == "failed"
     conn.close()
+
+
+def test_status_reports_phase_and_does_not_treat_complete_as_pass(demo):
+    run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
+    status = lambda: demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()  # noqa: E731
+    assert status()["phase"] is None and status()["result"] == "pending"
+    signed_post(demo, run_id, event_id="evt-00000001", event_type="model_ready")
+    assert status()["phase"] == "model_ready" and status()["result"] == "pending"
+    conn = store.connect()
+    store.finish(conn, run_id, "complete")
+    conn.close()
+    assert status()["result"] == "incomplete"  # Kaggle COMPLETE without the final passing event
+    signed_post(demo, run_id, event_id="evt-00000002", event_type="model_validation_completed",
+                payload={"status": "passed"})
+    assert status()["phase"] == "validated" and status()["result"] == "passed"
+
+
+def test_failed_validation_event_marks_result_failed(demo):
+    run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
+    signed_post(demo, run_id, event_type="modelcheck_completed", payload={"status": "failed"})
+    assert demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()["result"] == "failed"
+
+
+def test_repository_notebook_stages_and_reports_all_phases(demo):
+    staged = kaggle_launcher.render_prelude("run-0123456789abcdef")
+    notebook = json.loads((config.ROOT / "kaggle-notebook" / "notebookb061a06458.ipynb").read_text("utf-8"))
+    code = "\n".join("".join(c["source"]) for c in notebook["cells"])
+    compile(staged + "\n" + code, "notebook", "exec")
+    for event_type in demo_service.PHASES:
+        assert f'"{event_type}"' in code
+    assert "webhook.site" not in code
