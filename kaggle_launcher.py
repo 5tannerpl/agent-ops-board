@@ -103,7 +103,7 @@ def kernel_ref() -> str:
     return ref
 
 
-def render_prelude(run_id: str, mode: str = "light", units: int | None = None) -> str:
+def render_prelude(run_id: str, mode: str = "light", units: int | None = None, key_version: int = 1) -> str:
     if not _RUN_RE.fullmatch(run_id):
         raise LaunchError("Invalid run ID")
     if mode not in DEMO_MODES:
@@ -119,7 +119,7 @@ def render_prelude(run_id: str, mode: str = "light", units: int | None = None) -
             f"AOB_DEMO_MODE = {mode!r}\n"
             f"AOB_DEMO_UNITS = {units if mode == 'high_concurrency' else None!r}\n"
             f"AOB_EVENTS_URL = {config.EVENTS_PUBLIC_URL!r}\n"
-            f"_AOB_KEY = {demo_auth.run_event_key(run_id)!r}\n"
+            f"_AOB_KEY = {demo_auth.run_event_key(run_id, key_version)!r}\n"
             + PRELUDE_BODY)
 
 
@@ -240,7 +240,8 @@ def ensure_step6_counters(source: str) -> str:
 
 
 
-def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | None = None) -> None:
+def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | None = None,
+                   key_version: int = 1) -> None:
     """Pull latest verified Notebook, add signed event adapter and stage for Push."""
     target.mkdir(parents=True, exist_ok=True)
     _cli_checked(["kernels", "pull", kernel_ref(), "-m", "-p", str(target)],
@@ -303,7 +304,7 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
             "no changes submitted. Inspect the original Kaggle Notebook.")
 
     # Report when the notebook actually starts; no claims of readiness before /health.
-    notebook["cells"].insert(0, _code_cell(render_prelude(run_id, mode, units)))
+    notebook["cells"].insert(0, _code_cell(render_prelude(run_id, mode, units, key_version)))
     notebook["cells"].insert(1, _code_cell('aob_emit("notebook_started", {"status": "running"})\n'))
     notebook["cells"].append(_code_cell(render_scaling_cell()))
     for cell in notebook["cells"]:
@@ -367,14 +368,14 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
 
 
 
-def submit(run_id: str, mode: str = "light", units: int | None = None) -> None:
+def submit(run_id: str, mode: str = "light", units: int | None = None, key_version: int = 1) -> None:
     """Submit a Kaggle batch and log final metadata before Push."""
 
     with tempfile.TemporaryDirectory(prefix="aob-kaggle-") as tmp:
         target = Path(tmp)
 
         # 1. Pull → Adapt → Remove docker_image → Stage
-        stage_notebook(run_id, target, mode, units)
+        stage_notebook(run_id, target, mode, units, key_version)
 
         # 2. Read the actual metadata prepared for Push
         metadata_file = target / "kernel-metadata.json"

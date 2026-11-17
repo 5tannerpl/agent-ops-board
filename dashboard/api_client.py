@@ -92,9 +92,8 @@ def demo_status(token: str, run_id: str) -> dict:
     return _request("GET", f"/api/demo/{run_id}/status", **_bearer(token))
 
 
-def demo_events(token: str, run_id: str, types: list[str] | None = None) -> list[dict]:
-    params = {"limit": 500, **({"types": ",".join(types)} if types else {})}
-    return _request("GET", f"/api/demo/{run_id}/events", params=params, **_bearer(token))["items"]
+def demo_validation(token: str, run_id: str) -> list[dict]:
+    return _request("GET", f"/api/demo/{run_id}/validation", **_bearer(token))["items"]
 
 
 def demo_state(token: str, run_id: str) -> dict:

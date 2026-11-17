@@ -1,4 +1,4 @@
-"""FastAPI service: read-only dashboard endpoints plus load-test and synthetic submission."""
+"""Legacy dev app: private demo endpoints plus optional /v1 dashboard routes."""
 import re
 import threading
 import time
@@ -24,6 +24,8 @@ _producers: dict[str, threading.Thread] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if config.AOB_ENV == "production":
+        raise RuntimeError("api.main is a legacy dev app and must not run in production.")
     conn = db.connect()
     db.init_schema(conn)
     conn.close()
@@ -31,7 +33,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agent Ops Board API", version="1.0", lifespan=lifespan)
-app.include_router(demo_api.router)
+app.include_router(demo_api.private_router)
 
 
 def get_conn():
@@ -67,6 +69,8 @@ def supervisor_status(conn) -> dict:
 
 @app.get("/v1/dashboard")
 def dashboard(test_run_id: str | None = None, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     run = queries.latest_run(conn, valid_id(test_run_id) if test_run_id else None)
     now = db.now()
     if run and run["state"] == "RUNNING":
@@ -80,11 +84,15 @@ def dashboard(test_run_id: str | None = None, conn=Depends(get_conn)):
 
 @app.get("/v1/workers")
 def workers(conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     return {"server_time": db.now(), "items": queries.list_workers(conn)}
 
 
 @app.get("/v1/workers/{worker_id}")
 def worker(worker_id: str, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     view = queries.get_worker(conn, valid_id(worker_id))
     if view is None:
         raise HTTPException(404, "worker not found")
@@ -93,6 +101,8 @@ def worker(worker_id: str, conn=Depends(get_conn)):
 
 @app.get("/v1/workers/{worker_id}/events")
 def worker_events(worker_id: str, limit: int = Query(100, ge=1, le=500), conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     return {"items": queries.worker_events(conn, valid_id(worker_id), limit)}
 
 
@@ -102,12 +112,16 @@ def intake_units(status: str | None = None, channel: str | None = None, worker_i
                  test_run_id: str | None = None, created_after: float | None = None,
                  created_before: float | None = None, page: int = Query(1, ge=1),
                  page_size: int = Query(50, ge=1, le=200), conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     return queries.list_units(conn, status, channel, worker_id, q, intent, test_run_id,
                               created_after, created_before, page, page_size)
 
 
 @app.get("/v1/intake-units/{unit_id}")
 def intake_unit(unit_id: str, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     unit = queries.get_unit(conn, valid_id(unit_id))
     if unit is None:
         raise HTTPException(404, "intake unit not found")
@@ -116,6 +130,8 @@ def intake_unit(unit_id: str, conn=Depends(get_conn)):
 
 @app.get("/v1/intake-units/{unit_id}/steps")
 def intake_steps(unit_id: str, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     valid_id(unit_id)
     job = conn.execute("SELECT attempt FROM intake_jobs WHERE unit_id=?", (unit_id,)).fetchone()
     if job is None:
@@ -130,6 +146,8 @@ def intake_steps(unit_id: str, conn=Depends(get_conn)):
 
 @app.get("/v1/intake-units/{unit_id}/handoff")
 def intake_handoff(unit_id: str, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     valid_id(unit_id)
     if conn.execute("SELECT 1 FROM intake_units WHERE unit_id=?", (unit_id,)).fetchone() is None:
         raise HTTPException(404, "intake unit not found")
@@ -138,6 +156,8 @@ def intake_handoff(unit_id: str, conn=Depends(get_conn)):
 
 @app.get("/v1/intake-units/{unit_id}/attachments/{attachment_id}")
 def attachment(unit_id: str, attachment_id: str, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     row = conn.execute("SELECT * FROM attachments WHERE unit_id=? AND attachment_id=?",
                        (valid_id(unit_id), valid_id(attachment_id))).fetchone()
     if row is None:
@@ -158,6 +178,8 @@ class LoadTestRequest(BaseModel):
 
 @app.post("/v1/load-tests", status_code=202)
 def start_load_test(req: LoadTestRequest, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     faults = runner.DEMO_FAULTS if req.inject_faults is True else (req.inject_faults or None)
     try:
         run_id = runner.create_run(conn, req.scenario, req.target_units, req.arrival_window_seconds,
@@ -170,6 +192,8 @@ def start_load_test(req: LoadTestRequest, conn=Depends(get_conn)):
 
 @app.get("/v1/load-tests")
 def list_load_tests(conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     now = db.now()
     rows = conn.execute("SELECT * FROM load_test_runs ORDER BY started_at DESC LIMIT 20").fetchall()
     return {"items": [queries.run_view(dict(r), now) for r in rows], "scenarios": runner.SCENARIOS}
@@ -177,6 +201,8 @@ def list_load_tests(conn=Depends(get_conn)):
 
 @app.get("/v1/load-tests/{run_id}")
 def load_test(run_id: str, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     run = queries.latest_run(conn, valid_id(run_id))
     if run is None:
         raise HTTPException(404, "load test not found")
@@ -190,6 +216,8 @@ def load_test(run_id: str, conn=Depends(get_conn)):
 
 @app.post("/v1/load-tests/{run_id}/stop")
 def stop_load_test(run_id: str, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     if queries.latest_run(conn, valid_id(run_id)) is None:
         raise HTTPException(404, "load test not found")
     runner.request_stop(conn, run_id)
@@ -212,6 +240,8 @@ class MessageRequest(BaseModel):
 
 @app.post("/v1/messages", status_code=202)
 def submit_message(req: MessageRequest, conn=Depends(get_conn)):
+    if not config.AOB_ENABLE_LEGACY_V1:
+        raise HTTPException(404, "not found")
     try:
         unit_id = submit_unit(conn, req.channel, req.payload())
     except ValueError as exc:

@@ -1,4 +1,4 @@
-"""Live-demo HTTP API: Auth0-protected start/status/events plus the signed Kaggle event ingest."""
+"""Live-demo private API and public event ingress."""
 import json
 import re
 from typing import Literal
@@ -12,10 +12,17 @@ import demo_auth
 import demo_scaling
 import demo_service
 import demo_store as store
+from api.response_models import error_code
+from security.event_schemas import validate_payload
 
-router = APIRouter()
+private_router = APIRouter()
+ingress_router = APIRouter()
 _EVENT_TYPE = r"^[a-z0-9][a-z0-9_.-]{0,63}$"
 _EVENT_ID = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+_VALIDATION_EVENTS = (
+    "notebook_started", "environment_ready", "model_located", "model_ready", "model_validation_started",
+    "worker_validation_completed", "modelcheck_completed", "model_validation_completed",
+)
 
 
 def get_conn():
@@ -27,30 +34,37 @@ def get_conn():
 
 
 def run_view(run: dict) -> dict:
-    return {"run_id": run["run_id"], "status": run["status"], "kaggle_status": run["kaggle_status"],
-            "error": run["error"], "mode": run.get("mode"), "units": run.get("units"),
-            "created_at": run["created_at"], "updated_at": run["updated_at"], "finished_at": run["finished_at"]}
+    return {
+        "run_id": run["run_id"],
+        "status": run["status"],
+        "kaggle_status": run["kaggle_status"],
+        "error_code": error_code(run.get("error")),
+        "mode": run.get("mode"),
+        "units": run.get("units"),
+        "created_at": run["created_at"],
+        "updated_at": run["updated_at"],
+        "finished_at": run["finished_at"],
+    }
 
 
 def owned_run(conn, run_id: str, user: dict) -> dict:
-    """404 (not 403) for other users' runs so run ids cannot be probed."""
     run = store.get_run(conn, run_id) if store.RUN_ID_RE.match(run_id) else None
     if run is None or run["owner_sub"] != user["sub"]:
         raise HTTPException(404, "run not found")
     return demo_service.sync_run(conn, run)
 
 
-@router.get("/api/me")
+@private_router.get("/api/me")
 def me(user: dict = Depends(demo_auth.require_demo_access)):
     return {"user_id": user["sub"], "can_start_demo": True}
 
 
 class StartIn(BaseModel):
     mode: Literal["light", "high_concurrency"] = "light"
-    units: Literal[50, 100, 150] | None = None  # high_concurrency only; light always uses its fixed size
+    units: Literal[50, 100, 150] | None = None
 
 
-@router.post("/api/demo/start", status_code=202)
+@private_router.post("/api/demo/start", status_code=202)
 def start_demo(background: BackgroundTasks, body: StartIn | None = None,
                user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     body = body or StartIn()
@@ -67,41 +81,40 @@ def start_demo(background: BackgroundTasks, body: StartIn | None = None,
     return run_view(run)
 
 
-@router.get("/api/demo/runs")
+@private_router.get("/api/demo/runs")
 def list_runs(user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     runs = [demo_service.sync_run(conn, r) for r in store.list_runs(conn, user["sub"])]
     return {"items": [run_view(r) for r in runs]}
 
 
-@router.get("/api/demo/{run_id}/status")
+@private_router.get("/api/demo/{run_id}/status")
 def run_status(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     run = owned_run(conn, run_id, user)
     return {**run_view(run), **demo_service.summarize_run(conn, run)}
 
 
-@router.get("/api/demo/{run_id}/state")
+@private_router.get("/api/demo/{run_id}/state")
 def run_state(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     run = owned_run(conn, run_id, user)
     return {**run_view(run), **demo_scaling.state(conn, run)}
 
 
-@router.get("/api/demo/{run_id}/metrics")
+@private_router.get("/api/demo/{run_id}/metrics")
 def run_metrics(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     return demo_scaling.metrics(conn, owned_run(conn, run_id, user))
 
 
-@router.get("/api/demo/{run_id}/summary")
+@private_router.get("/api/demo/{run_id}/summary")
 def run_summary(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     return demo_scaling.summary(conn, owned_run(conn, run_id, user))
 
 
-@router.get("/api/demo/{run_id}/events")
-def run_events(run_id: str, after_id: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=500),
-               types: str | None = Query(None, max_length=1000, description="comma-separated event types"),
-               user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+@private_router.get("/api/demo/{run_id}/validation")
+def run_validation(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
     owned_run(conn, run_id, user)
-    wanted = tuple(t for t in (types or "").split(",") if re.match(_EVENT_TYPE, t)) or None
-    return {"items": store.list_events(conn, run_id, after_id, limit, wanted)}
+    events = store.list_events(conn, run_id, 0, config.EVENT_MAX_PER_RUN, _VALIDATION_EVENTS)
+    return {"items": [{"id": e["id"], "received_at": e["received_at"], "event_type": e["event_type"],
+                       "status": e["payload"].get("status")} for e in events]}
 
 
 class EventIn(BaseModel):
@@ -115,24 +128,28 @@ class EventIn(BaseModel):
 def ingest_event(event: EventIn) -> str:
     conn = store.connect()
     try:
-        if store.get_run(conn, event.run_id) is None:
-            raise HTTPException(404, "unknown run")
         if store.count_events(conn, event.run_id) >= config.EVENT_MAX_PER_RUN:
             raise HTTPException(429, "event limit reached for this run")
-        inserted = store.add_event(conn, event.run_id, event.event_id, event.event_type, event.payload, event.ts)
+        try:
+            inserted = store.add_event(conn, event.run_id, event.event_id, event.event_type, event.payload, event.ts)
+        except store.EventExpired:
+            raise HTTPException(410, "run is no longer accepting events")
+        except store.EventRejected:
+            raise HTTPException(403, "run is no longer accepting events")
         return "accepted" if inserted else "duplicate"
     finally:
         conn.close()
 
 
-@router.post("/api/events")
+@ingress_router.post("/api/events")
 async def receive_event(request: Request):
-    """Authenticated by an HMAC over the raw body with a per-run key, not by an Auth0 token."""
     if not config.EVENT_SECRET:
         raise HTTPException(503, "Event ingest is not configured")
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > config.EVENT_MAX_BYTES:
         raise HTTPException(413, "event too large")
+    if "application/json" not in (request.headers.get("content-type") or "").lower():
+        raise HTTPException(415, "content type must be application/json")
     body = await request.body()
     if len(body) > config.EVENT_MAX_BYTES:
         raise HTTPException(413, "event too large")
@@ -141,11 +158,22 @@ async def receive_event(request: Request):
         run_id = raw["run_id"]
     except (ValueError, KeyError, TypeError):
         raise HTTPException(400, "malformed event")
-    if not isinstance(run_id, str) or not re.match(store.RUN_ID_RE.pattern, run_id) or not demo_auth.verify_event(
-            run_id, request.headers.get("x-aob-timestamp"), request.headers.get("x-aob-signature"), body):
+    if not isinstance(run_id, str) or not re.match(store.RUN_ID_RE.pattern, run_id):
+        raise HTTPException(400, "malformed event")
+    conn = store.connect()
+    try:
+        run = store.get_run(conn, run_id)
+    finally:
+        conn.close()
+    version = int((run or {}).get("event_key_version") or config.EVENT_KEY_VERSION)
+    if not demo_auth.verify_event(run_id, request.headers.get("x-aob-timestamp"), request.headers.get("x-aob-signature"),
+                                  body, version):
+        raise HTTPException(401, "invalid event signature")
+    if run is None:
         raise HTTPException(401, "invalid event signature")
     try:
         event = EventIn.model_validate(raw)
-    except ValidationError:
+        event.payload = validate_payload(event.event_type, event.payload)
+    except (ValidationError, ValueError):
         raise HTTPException(422, "invalid event")
     return {"status": await run_in_threadpool(ingest_event, event)}

@@ -9,11 +9,14 @@ import os
 import streamlit as st
 
 import api_client
+import config
 
 PROVIDER = os.environ.get("AOB_AUTH_PROVIDER", "auth0")
 
 
 def login_required() -> bool:
+    if config.AOB_ENV == "production":
+        return True
     if os.environ.get("AOB_REQUIRE_LOGIN", "").lower() in ("1", "true", "yes"):
         return True
     try:
@@ -40,6 +43,13 @@ def require_login() -> str | None:
     """Return the API access token for a whitelisted user, ``None`` when login is disabled, else stop."""
     if not login_required():
         return None
+    if config.AOB_ENV == "production":
+        try:
+            has_auth = "auth" in st.secrets
+        except Exception:
+            has_auth = False
+        if not has_auth:
+            _stop_with_logout("error", "Authentication is required in production, but auth config is missing.")
     if not st.user.is_logged_in:
         st.info("Private demo: invited users only. There is no public sign-up.")
         if st.button("Log in", type="primary"):

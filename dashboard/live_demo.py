@@ -7,9 +7,6 @@ import api_client
 import ui
 
 ACTIVE = ("submitting", "queued", "running")
-VALIDATION_EVENTS = ["notebook_started", "environment_ready", "model_located", "model_ready",
-                     "model_validation_started", "worker_validation_completed", "modelcheck_completed",
-                     "model_validation_completed"]
 PHASE_TEXT = {None: "Initializing — no detailed progress reported yet", "initializing": "Initializing notebook",
               "loading_model": "Loading model", "model_ready": "Model server ready (/health 200)",
               "validating": "Running real model validation", "validated": "Validation finished"}
@@ -46,12 +43,12 @@ def chart_frames(points: list[dict]) -> dict[str, pd.DataFrame]:
 
 
 def _events_table(token: str, run_id: str) -> None:
-    events = api_client.demo_events(token, run_id, VALIDATION_EVENTS)
+    events = api_client.demo_validation(token, run_id)
     if not events:
         st.caption("No events received yet.")
         return
     rows = [{"Received": ui.fmt_ts(e["received_at"]), "Event": e["event_type"],
-             "Details": ", ".join(f"{k}={v}" for k, v in e["payload"].items())} for e in events]
+             "Status": e.get("status") or "—"} for e in events]
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 
@@ -287,8 +284,8 @@ def _run_panel(token: str, run_id: str, active: bool) -> None:
             f"{icon} **{current_status.upper()}** · {description}"
         )
 
-        if status.get("error"):
-            st.error(status["error"])
+        if status.get("error_code"):
+            st.error(status["error_code"])
 
         # Validation events
         st.markdown("#### Validation events")

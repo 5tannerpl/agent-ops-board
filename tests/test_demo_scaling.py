@@ -48,8 +48,8 @@ def test_start_accepts_mode_and_units_and_defaults_to_light(demo):
 def test_existing_five_events_and_old_runs_still_render(demo):
     run_id = start(demo)
     for n, t in enumerate(["notebook_started", "model_validation_started", "worker_validation_completed",
-                           "modelcheck_completed", "model_validation_completed"]):
-        emit(demo, run_id, n + 1, t, status="passed")
+                           "modelcheck_completed", "model_validation_completed"], start=1):
+        emit(demo, run_id, n, t, **({"status": "passed"} if t != "notebook_started" else {}))
     state = demo.get(f"/api/demo/{run_id}/state", headers=auth()).json()
     assert state["scaling_status"] is None and state["snapshot"] is None and state["timeline"] == []
     status = demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()
@@ -72,14 +72,20 @@ def test_state_metrics_and_summary_come_from_reported_events_only(demo):
     assert "2 → 4" in state["timeline"][1]["label"]
     points = demo.get(f"/api/demo/{run_id}/metrics", headers=auth()).json()["points"]
     assert [p["actual_workers"] for p in points] == [4, 8] and points[0]["t"] == 0
-    # A passing model validation or a finished Kaggle batch is not a scaling pass.
-    conn = store.connect()
-    store.finish(conn, run_id, "complete")
-    conn.close()
-    assert demo.get(f"/api/demo/{run_id}/state", headers=auth()).json()["scaling_status"] == "incomplete"
+    # A passing model validation is not a scaling pass.
     emit(demo, run_id, 6, "scaling_demo_completed", status="degraded", reasons=["GPU1_NO_INFERENCE_REQUESTS"])
     summary = demo.get(f"/api/demo/{run_id}/summary", headers=auth()).json()
     assert summary["scaling_status"] == "degraded" and summary["summary"]["reasons"]
+    # A finished Kaggle batch without scaling completion is incomplete.
+    conn = store.connect()
+    store.finish(conn, run_id, "complete")
+    conn.close()
+    run2 = start(demo, mode="high_concurrency")
+    emit(demo, run2, 1, "model_validation_completed", status="passed")
+    conn = store.connect()
+    store.finish(conn, run2, "complete")
+    conn.close()
+    assert demo.get(f"/api/demo/{run2}/state", headers=auth()).json()["scaling_status"] == "incomplete"
 
 
 def test_failure_event_marks_scaling_failed_and_telemetry_delay_is_flagged(demo):
@@ -90,7 +96,7 @@ def test_failure_event_marks_scaling_failed_and_telemetry_delay_is_flagged(demo)
     conn.close()
     state = demo.get(f"/api/demo/{run_id}/state", headers=auth()).json()
     assert state["telemetry_delayed"] is True and state["seconds_since_last_event"] >= 100
-    emit(demo, run_id, 2, "scaling_demo_failed", status="failed", phase="gpu0", error_code="GPU_UNAVAILABLE")
+    emit(demo, run_id, 2, "scaling_demo_failed", phase="gpu0", error_code="GPU_UNAVAILABLE")
     state = demo.get(f"/api/demo/{run_id}/state", headers=auth()).json()
     assert state["scaling_status"] == "failed" and state["failure"]["error_code"] == "GPU_UNAVAILABLE"
     assert state["telemetry_delayed"] is False
@@ -189,11 +195,8 @@ def test_events_can_be_filtered_by_type_with_a_stable_cursor(demo):
     emit(demo, run_id, 1, "notebook_started")
     emit(demo, run_id, 2, "scaling_metrics_snapshot", **snapshot())
     emit(demo, run_id, 3, "model_validation_completed", status="passed")
-    url = f"/api/demo/{run_id}/events"
-    items = demo.get(url, params={"types": "notebook_started,model_validation_completed"}, headers=auth()).json()["items"]
+    items = demo.get(f"/api/demo/{run_id}/validation", headers=auth()).json()["items"]
     assert [i["event_type"] for i in items] == ["notebook_started", "model_validation_completed"]
-    later = demo.get(url, params={"after_id": items[0]["id"]}, headers=auth()).json()["items"]
-    assert [i["event_type"] for i in later] == ["scaling_metrics_snapshot", "model_validation_completed"]
 
 
 def test_bootstrap_reports_environment_problems_instead_of_skipping_silently(tmp_path, monkeypatch):

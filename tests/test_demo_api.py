@@ -11,7 +11,8 @@ import demo_auth
 import kaggle_launcher
 import demo_service
 import demo_store as store
-from api.main import app
+from api.private_app import app as private_app
+from api.public_ingress import app as ingress_app
 
 DOMAIN = "tenant.example.auth0.com"
 AUDIENCE = "https://agent-ops-board-api"
@@ -43,9 +44,10 @@ def demo(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEMO_MIN_INTERVAL_SECONDS", 0)
     monkeypatch.setattr(demo_auth, "signing_key", lambda _t: KEY.public_key())
     pushed, status = [], {"value": "queued"}
-    monkeypatch.setattr(kaggle_launcher, "submit", lambda run_id, mode="light", units=None: pushed.append(run_id))
+    monkeypatch.setattr(kaggle_launcher, "submit", lambda run_id, *args, **kwargs: pushed.append(run_id))
     monkeypatch.setattr(kaggle_launcher, "kernel_status", lambda: status["value"])
-    client = TestClient(app)
+    client = TestClient(private_app)
+    client.ingress = TestClient(ingress_app)
     client.pushed, client.kaggle = pushed, status
     return client
 
@@ -56,7 +58,7 @@ def signed_post(client, run_id, event_id="evt-00000001", event_type="model_valid
                        "payload": {"seconds": 1.5}, **extra}).encode()
     stamp = str(int(ts or time.time()))
     sig = demo_auth.sign_event(key_run_id or run_id, stamp, body)
-    return client.post("/api/events", content=body, headers={
+    return client.ingress.post("/api/events", content=body, headers={
         "X-AOB-Timestamp": stamp, "X-AOB-Signature": sig, "Content-Type": "application/json"})
 
 
@@ -118,7 +120,7 @@ def test_failed_submission_marks_run_failed(demo, monkeypatch):
     monkeypatch.setattr(kaggle_launcher, "submit", boom)
     run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
     status = demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()
-    assert status["status"] == "failed" and "nope" in status["error"]
+    assert status["status"] == "failed" and status["error_code"] == "KAGGLE_SUBMISSION_FAILED"
 
 
 def test_rate_limit_per_user(demo, monkeypatch):
@@ -140,21 +142,19 @@ def test_stuck_runs_time_out(demo, monkeypatch):
 
 def test_events_are_signed_deduplicated_and_persisted(demo):
     run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
-    assert demo.post("/api/events", json={"run_id": run_id}).status_code == 401
+    assert demo.ingress.post("/api/events", json={"run_id": run_id}).status_code == 401
     assert signed_post(demo, run_id, key_run_id="run-0000000000000000").status_code == 401  # key of another run
     assert signed_post(demo, run_id, ts=time.time() - 3600).status_code == 401  # replay outside the window
-    assert signed_post(demo, "run-ffffffffffffffff").status_code == 404  # valid signature, unknown run
+    assert signed_post(demo, "run-ffffffffffffffff").status_code == 401  # no run-existence leak
     assert signed_post(demo, run_id).json() == {"status": "accepted"}
     assert signed_post(demo, run_id).json() == {"status": "duplicate"}
     assert signed_post(demo, run_id, event_id="evt-00000002", event_type="model_validation_completed"
                        ).status_code == 200
     assert signed_post(demo, run_id, event_type="Bad Type").status_code == 422
 
-    events = demo.get(f"/api/demo/{run_id}/events", headers=auth()).json()["items"]
+    events = demo.get(f"/api/demo/{run_id}/validation", headers=auth()).json()["items"]
     assert [e["event_type"] for e in events] == ["model_validation_started", "model_validation_completed"]
-    assert events[0]["payload"] == {"seconds": 1.5}
-    assert demo.get(f"/api/demo/{run_id}/events", params={"after_id": events[0]["id"]},
-                    headers=auth()).json()["items"][0]["event_id"] == "evt-00000002"
+    assert events[0]["status"] is None
     # Events prove the notebook started, but do not mark the run complete.
     assert demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()["status"] == "running"
 
@@ -165,14 +165,14 @@ def test_events_survive_run_completion(demo):
     conn = store.connect()
     store.finish(conn, run_id, "complete")
     conn.close()
-    assert len(demo.get(f"/api/demo/{run_id}/events", headers=auth()).json()["items"]) == 1
-    assert signed_post(demo, run_id, event_id="evt-late-0001").json() == {"status": "accepted"}
+    assert len(demo.get(f"/api/demo/{run_id}/validation", headers=auth()).json()["items"]) == 1
+    assert signed_post(demo, run_id, event_id="evt-late-0001").status_code in (403, 410)
 
 
 def test_runs_are_visible_only_to_their_owner(demo):
     run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
     assert demo.get(f"/api/demo/{run_id}/status", headers=auth("auth0|bob")).status_code == 404
-    assert demo.get(f"/api/demo/{run_id}/events", headers=auth("auth0|bob")).status_code == 404
+    assert demo.get(f"/api/demo/{run_id}/validation", headers=auth("auth0|bob")).status_code == 404
     assert demo.get("/api/demo/runs", headers=auth("auth0|bob")).json()["items"] == []
     assert [r["run_id"] for r in demo.get("/api/demo/runs", headers=auth()).json()["items"]] == [run_id]
 
@@ -181,9 +181,26 @@ def test_notebook_staging_injects_run_config_without_the_master_secret(demo, tmp
     src = tmp_path / "nb"
     src.mkdir()
     (src / "kernel-metadata.json").write_text(json.dumps({"id": "u/nb", "code_file": "nb.ipynb"}))
-    (src / "nb.ipynb").write_text(json.dumps({"cells": [{"cell_type": "code", "source": ["print(1)"]}],
+    legacy_step6 = (
+        "sent = 0\nfailed = 0\n"
+        "def send_event(event_type, data):\n    pass\n"
+        "send_event('model_validation_started', {})\n"
+        "send_event('worker_validation_completed', {})\n"
+        "send_event('modelcheck_completed', {})\n"
+        "send_event('model_validation_completed', {})\n"
+    )
+    (src / "nb.ipynb").write_text(json.dumps({"cells": [{"cell_type": "code", "source": [legacy_step6]}],
                                               "nbformat": 4, "nbformat_minor": 5}))
-    monkeypatch.setattr(config, "KAGGLE_NOTEBOOK_DIR", src)
+    def fake_pull(args, timeout, operation):
+        if operation != "pull":
+            return None
+        target = tmp_path / "staged"
+        (target / "kernel-metadata.json").write_text(json.dumps({
+            "id": "sillypanda5/notebookb061a06458", "code_file": "nb.ipynb",
+            "dataset_sources": ["sillypanda5/agent-ops-qwen-model", "sillypanda5/agent-ops-llama-cuda-t4"],
+        }))
+        (target / "nb.ipynb").write_text((src / "nb.ipynb").read_text())
+    monkeypatch.setattr(kaggle_launcher, "_cli_checked", fake_pull)
     out = tmp_path / "staged"
     kaggle_launcher.stage_notebook("run-0123456789abcdef", out)
     raw = (out / "nb.ipynb").read_bytes()
@@ -192,7 +209,7 @@ def test_notebook_staging_injects_run_config_without_the_master_secret(demo, tmp
     assert "run-0123456789abcdef" in first and demo_auth.run_event_key("run-0123456789abcdef") in first
     assert "test-secret" not in first
     compile(first, "prelude", "exec")
-    assert json.loads(raw)["cells"][1]["source"] == ["print(1)"]
+    assert "def send_event(" in "".join(json.loads(raw)["cells"][2]["source"])
     assert (src / "nb.ipynb").read_text() != raw.decode()  # source notebook untouched
 
 
@@ -214,9 +231,9 @@ def test_status_reports_phase_and_does_not_treat_complete_as_pass(demo):
     store.finish(conn, run_id, "complete")
     conn.close()
     assert status()["result"] == "incomplete"  # Kaggle COMPLETE without the final passing event
-    signed_post(demo, run_id, event_id="evt-00000002", event_type="model_validation_completed",
-                payload={"status": "passed"})
-    assert status()["phase"] == "validated" and status()["result"] == "passed"
+    assert signed_post(demo, run_id, event_id="evt-00000002", event_type="model_validation_completed",
+                       payload={"status": "passed"}).status_code in (403, 410)
+    assert status()["phase"] == "model_ready" and status()["result"] == "incomplete"
 
 
 def test_failed_validation_event_marks_result_failed(demo):

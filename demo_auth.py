@@ -67,17 +67,17 @@ def require_demo_access(user: dict = Depends(require_user)) -> dict:
 
 # ---- Kaggle -> /api/events request signing -----------------------------------------------------
 
-def run_event_key(run_id: str) -> str:
+def run_event_key(run_id: str, version: int = 1) -> str:
     """Per-run key: the notebook only ever holds a key that is valid for its own run_id."""
-    return hmac.new(config.EVENT_SECRET.encode(), f"run:{run_id}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(config.EVENT_SECRET.encode(), f"run:{run_id}:v:{version}".encode(), hashlib.sha256).hexdigest()
 
 
-def sign_event(run_id: str, timestamp: str, body: bytes) -> str:
-    mac = hmac.new(run_event_key(run_id).encode(), timestamp.encode() + b"." + body, hashlib.sha256)
+def sign_event(run_id: str, timestamp: str, body: bytes, version: int = 1) -> str:
+    mac = hmac.new(run_event_key(run_id, version).encode(), timestamp.encode() + b"." + body, hashlib.sha256)
     return "sha256=" + mac.hexdigest()
 
 
-def verify_event(run_id: str, timestamp: str | None, signature: str | None, body: bytes) -> bool:
+def verify_event(run_id: str, timestamp: str | None, signature: str | None, body: bytes, version: int = 1) -> bool:
     if not config.EVENT_SECRET or not timestamp or not signature or not SIGNATURE_RE.match(signature):
         return False
     try:
@@ -85,4 +85,4 @@ def verify_event(run_id: str, timestamp: str | None, signature: str | None, body
             return False
     except ValueError:
         return False
-    return hmac.compare_digest(signature, sign_event(run_id, timestamp, body))
+    return hmac.compare_digest(signature, sign_event(run_id, timestamp, body, version))

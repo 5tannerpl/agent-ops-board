@@ -17,6 +17,18 @@ TIMELINE_TYPES = (
     "scaling_controller_error", COMPLETED, FAILED)
 TELEMETRY_DELAY_SECONDS = 30.0
 MAX_METRIC_POINTS = 600
+_SAFE_SNAPSHOT_FIELDS = (
+    "pending", "running", "completed", "failed", "total", "actual_workers", "desired_workers", "gpu_instances_ready",
+    "scaling_state", "requests_by_gpu", "inflight_by_gpu", "units_by_gpu", "unattributed_units"
+)
+_SAFE_GPU_FIELDS = ("state", "memory_used_mb", "utilization_pct")
+_SAFE_SUMMARY_FIELDS = (
+    "status", "completed", "total", "failed", "retries", "p50_seconds", "p95_seconds", "throughput_per_min",
+    "peak_workers", "final_workers", "confirmed_worker_levels", "peak_gpu_instances", "final_gpu_instances",
+    "gpu0_units_completed", "gpu1_units_completed", "unattributed_units", "gpu1_load_seconds",
+    "gpu1_stopped_cleanly", "scale_out_seconds", "scale_in_seconds", "telemetry_failed_events", "reasons"
+)
+_SAFE_FAILURE_FIELDS = ("error_code", "phase", "message")
 
 
 def label(event_type: str, d: dict) -> str:
@@ -43,6 +55,27 @@ def label(event_type: str, d: dict) -> str:
 
 def _last(events: list[dict], event_type: str) -> dict | None:
     return next((e for e in reversed(events) if e["event_type"] == event_type), None)
+
+
+def _safe_gpu(gpu: dict | None) -> dict | None:
+    if not isinstance(gpu, dict):
+        return None
+    return {k: gpu.get(k) for k in _SAFE_GPU_FIELDS if k in gpu}
+
+
+def _safe_snapshot(snapshot: dict | None) -> dict | None:
+    if not isinstance(snapshot, dict):
+        return None
+    clean = {k: snapshot.get(k) for k in _SAFE_SNAPSHOT_FIELDS if k in snapshot}
+    clean["gpu0"] = _safe_gpu(snapshot.get("gpu0"))
+    clean["gpu1"] = _safe_gpu(snapshot.get("gpu1"))
+    return clean
+
+
+def _safe_fields(data: dict | None, allowed: tuple[str, ...]) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    return {k: data.get(k) for k in allowed if k in data}
 
 
 def status_of(run: dict, events: list[dict]) -> str | None:
@@ -83,15 +116,15 @@ def state(conn, run: dict, now: float | None = None) -> dict:
         "units": (started["payload"].get("planned_units") if started else None) or run.get("units"),
         "scaling_status": status, "live": active and status == "running",
         "scaling_state": snapshot.get("scaling_state") if snapshot else None,
-        "snapshot": snapshot, "snapshot_received_at": latest["received_at"] if latest else None,
+        "snapshot": _safe_snapshot(snapshot), "snapshot_received_at": latest["received_at"] if latest else None,
         "seconds_since_last_event": age,
         "telemetry_delayed": bool(active and status == "running" and age is not None
                                   and age > TELEMETRY_DELAY_SECONDS),
         "plan": started["payload"] if started else None,
-        "summary": completed["payload"] if completed else None,
-        "failure": failure["payload"] if failure else None,
+        "summary": _safe_fields(completed["payload"], _SAFE_SUMMARY_FIELDS) if completed else None,
+        "failure": _safe_fields(failure["payload"], _SAFE_FAILURE_FIELDS) if failure else None,
         "timeline": [{"id": e["id"], "received_at": e["received_at"], "event_type": e["event_type"],
-                      "label": label(e["event_type"], e["payload"]), "data": e["payload"]} for e in events],
+                      "label": label(e["event_type"], e["payload"])} for e in events],
     }
 
 
@@ -117,5 +150,6 @@ def metrics(conn, run: dict) -> dict:
 def summary(conn, run: dict) -> dict:
     events = _scaling_events(conn, run["run_id"])
     done, failed = _last(events, COMPLETED), _last(events, FAILED)
-    return {"scaling_status": status_of(run, events), "summary": done["payload"] if done else None,
-            "failure": failed["payload"] if failed else None}
+    return {"scaling_status": status_of(run, events),
+            "summary": _safe_fields(done["payload"], _SAFE_SUMMARY_FIELDS) if done else None,
+            "failure": _safe_fields(failed["payload"], _SAFE_FAILURE_FIELDS) if failed else None}

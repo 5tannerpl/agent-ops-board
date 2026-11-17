@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 import api_client
+import config
 import live_demo
 import ui
 
@@ -12,6 +13,9 @@ token = ui.page_header("Agent Ops Board")
 ui.inject_area_css()
 if token:
     live_demo.render(token)
+if config.AOB_ENV == "production":
+    st.info("Phase 1 production mode: only the private live demo panel is available.")
+    st.stop()
 
 STATUSES = ["PENDING", "RUNNING", "WAITING_RETRY", "COMPLETED", "FAILED", "MANUAL_REVIEW"]
 INTENTS = ["PAYMENT_VERIFICATION", "DEBT_DISPUTE", "PAYMENT_ARRANGEMENT", "HARDSHIP_NOTIFICATION",

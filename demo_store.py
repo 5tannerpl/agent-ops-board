@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS demo_runs (
   run_id TEXT PRIMARY KEY, owner_sub TEXT NOT NULL, status TEXT NOT NULL,
   kaggle_status TEXT, kaggle_seen_active INTEGER NOT NULL DEFAULT 0, error TEXT,
   created_at REAL NOT NULL, updated_at REAL NOT NULL, submitted_at REAL,
-  last_synced_at REAL, finished_at REAL);
+  last_synced_at REAL, finished_at REAL, event_key_version INTEGER NOT NULL DEFAULT 1,
+  event_expires_at REAL, event_revoked_at REAL);
 CREATE INDEX IF NOT EXISTS ix_demo_runs_owner ON demo_runs(owner_sub, created_at);
 CREATE INDEX IF NOT EXISTS ix_demo_runs_status ON demo_runs(status);
 
@@ -47,11 +48,25 @@ class RateLimited(Exception):
         self.retry_after = max(1, int(retry_after))
 
 
+class EventRejected(Exception):
+    pass
+
+
+class EventExpired(EventRejected):
+    pass
+
+
 def connect() -> sqlite3.Connection:
     conn = db.connect(config.DEMO_DB_PATH)
     conn.executescript(SCHEMA)
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(demo_runs)")}
-    for name, ddl in (("mode", "TEXT"), ("units", "INTEGER")):  # added after the first release
+    for name, ddl in (
+            ("mode", "TEXT"),
+            ("units", "INTEGER"),
+            ("event_key_version", "INTEGER NOT NULL DEFAULT 1"),
+            ("event_expires_at", "REAL"),
+            ("event_revoked_at", "REAL"),
+    ):  # added after the first release
         if name not in columns:
             try:
                 conn.execute(f"ALTER TABLE demo_runs ADD COLUMN {name} {ddl}")
@@ -93,8 +108,13 @@ def create_run(conn, owner_sub: str, mode: str = "light", units: int | None = No
         if today >= config.DEMO_MAX_RUNS_PER_DAY:
             raise RateLimited("Daily demo limit reached.", 3600)
         run_id = f"run-{secrets.token_hex(8)}"
-        conn.execute("INSERT INTO demo_runs(run_id, owner_sub, status, created_at, updated_at, mode, units) "
-                     "VALUES(?, ?, 'submitting', ?, ?, ?, ?)", (run_id, owner_sub, now, now, mode, units))
+        expires_at = now + config.DEMO_MAX_RUN_SECONDS + config.EVENT_FINALIZATION_GRACE_SECONDS
+        conn.execute(
+            "INSERT INTO demo_runs("
+            "run_id, owner_sub, status, created_at, updated_at, mode, units, event_key_version, event_expires_at"
+            ") VALUES(?, ?, 'submitting', ?, ?, ?, ?, ?, ?)",
+            (run_id, owner_sub, now, now, mode, units, config.EVENT_KEY_VERSION, expires_at),
+        )
     return get_run(conn, run_id)
 
 
@@ -113,6 +133,7 @@ def finish(conn, run_id: str, status: str, error: str | None = None) -> None:
     conn.execute("UPDATE demo_runs SET status=?, error=?, updated_at=?, finished_at=? "
                  "WHERE run_id=? AND status IN ('submitting','queued','running')",
                  (status, error, now, now, run_id))
+    conn.execute("UPDATE demo_runs SET event_revoked_at=COALESCE(event_revoked_at, ?) WHERE run_id=?", (now, run_id))
 
 
 def record_sync(conn, run_id: str, kaggle_status: str | None = None, seen_active: bool = False) -> None:
@@ -124,9 +145,22 @@ def record_sync(conn, run_id: str, kaggle_status: str | None = None, seen_active
 def add_event(conn, run_id: str, event_id: str, event_type: str, payload: dict, event_ts: float | None) -> bool:
     """Insert once per (run_id, event_id); returns False for a duplicate."""
     with db.tx(conn):
+        run = conn.execute(
+            "SELECT status, event_expires_at, event_revoked_at FROM demo_runs WHERE run_id=?",
+            (run_id,)
+        ).fetchone()
+        if run is None:
+            raise EventRejected("unknown run")
+        if run["status"] not in ACTIVE:
+            raise EventRejected("run is not active")
+        now = db.now()
+        if run["event_revoked_at"] and now >= run["event_revoked_at"]:
+            raise EventRejected("run key revoked")
+        if run["event_expires_at"] and now > run["event_expires_at"]:
+            raise EventExpired("run key expired")
         cur = conn.execute(
             "INSERT OR IGNORE INTO demo_events(run_id, event_id, event_type, payload, event_ts, received_at) "
-            "VALUES(?,?,?,?,?,?)", (run_id, event_id, event_type, json.dumps(payload), event_ts, db.now()))
+            "VALUES(?,?,?,?,?,?)", (run_id, event_id, event_type, json.dumps(payload), event_ts, now))
         if cur.rowcount:
             # Any event proves the notebook is executing on Kaggle.
             conn.execute("UPDATE demo_runs SET kaggle_seen_active=1 WHERE run_id=?", (run_id,))
