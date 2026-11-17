@@ -38,12 +38,7 @@ def chart_frames(points: list[dict]) -> dict[str, pd.DataFrame]:
 
     frames = {
         "Queue depth": pick({"pending": "Pending", "running": "Running"}),
-        "Workers": pick({"actual_workers": "Actual workers", "desired_workers": "Desired workers"}),
-        "GPU model instances ready": pick({"gpu_instances_ready": "Ready instances"}),
-        "Completed units by GPU": pick({
-            "gpu0_units": "GPU 0",
-            "gpu1_units": "GPU 1"
-        }),
+        "Workers": pick({"actual_workers": "Actual workers", "desired_workers": "Desired workers"}),        
         "GPU utilization %": pick({"gpu0_utilization_pct": "GPU 0", "gpu1_utilization_pct": "GPU 1"}),
         "GPU memory used (MB)": pick({"gpu0_memory_mb": "GPU 0", "gpu1_memory_mb": "GPU 1"}),
     }
@@ -89,13 +84,12 @@ def _scaling_overview(state: dict) -> None:
     if state["telemetry_delayed"]:
         st.warning(f"Telemetry delayed — last event {state['seconds_since_last_event']:.0f}s ago. "
                    "Values below may be stale.")
-    c = st.columns(6)
+    c = st.columns(5)
     c[0].metric("Actual / desired workers", f"{na(snap.get('actual_workers'))} / {na(snap.get('desired_workers'))}")
-    c[1].metric("GPU instances ready", f"{na(snap.get('gpu_instances_ready'))} / 2")
-    c[2].metric("Pending", na(snap.get("pending")))
-    c[3].metric("Running", na(snap.get("running")))
-    c[4].metric("Completed", f"{na(snap.get('completed'))} / {na(snap.get('total') or state.get('units'))}")
-    c[5].metric("Failed", na(snap.get("failed")))
+    c[1].metric("Pending", na(snap.get("pending")))
+    c[2].metric("Running", na(snap.get("running")))
+    c[3].metric("Completed", f"{na(snap.get('completed'))} / {na(snap.get('total') or state.get('units'))}")
+    c[4].metric("Failed", na(snap.get("failed")))
     st.markdown(f"Scaling state: **{state['scaling_state'] or 'N/A'}**"
                 + (" · 🔴 LIVE" if state["live"] else ""))
     by_gpu = snap.get("units_by_gpu") or {}
@@ -130,13 +124,15 @@ def _live_metrics(points: list[dict]) -> None:
         return
     st.markdown("#### Live metrics")
     st.caption("Seconds since the first snapshot; every point is a real reading from the Kaggle batch.")
+    # Larger charts: two wide columns, roughly 1.6:1 on a typical desktop.
+    # Streamlit automatically stacks the columns on narrow screens.
     names = list(frames)
     for i in range(0, len(names), 2):
-        cols = st.columns(2)
+        cols = st.columns(2, gap="large")
         for col, name in zip(cols, names[i:i + 2]):
             with col:
-                st.caption(name)
-                st.line_chart(frames[name], height=180)
+                st.markdown(f"**{name}**")
+                st.line_chart(frames[name], height=310, width="stretch")
 
 
 def _timeline(state: dict) -> None:
@@ -208,15 +204,40 @@ def render(token: str) -> None:
         c3.write("")
         if c3.button("▶ Start Live Demo", type="primary", disabled=busy):
             try:
-                api_client.demo_start(token, mode, units if mode == "high_concurrency" else None)
+                started = api_client.demo_start(
+                    token, mode, units if mode == "high_concurrency" else None
+                )
+                # The new run is not in this render's `runs` list yet.
+                # Apply the selection before creating the selectbox on rerun.
+                new_id = started.get("run_id") if isinstance(started, dict) else None
+                if new_id:
+                    st.session_state["demo_requested_run_id"] = new_id
+                else:
+                    st.session_state["demo_previous_run_ids"] = [r["run_id"] for r in runs]
                 st.rerun()
             except api_client.ApiError as exc:
                 st.error({409: "A demo is already queued or running.",
                           429: str(exc)}.get(exc.status, f"Start failed: {exc}"))
         if not runs:
             return
-        run_id = st.selectbox("Run", [r["run_id"] for r in runs], key="demo_run")
+        run_ids = [r["run_id"] for r in runs]
+        requested_id = st.session_state.get("demo_requested_run_id")
+        previous_ids = st.session_state.get("demo_previous_run_ids")
+        if requested_id in run_ids:
+            st.session_state["demo_run"] = requested_id
+            st.session_state.pop("demo_requested_run_id", None)
+            st.session_state.pop("demo_previous_run_ids", None)
+        elif previous_ids is not None:
+            new_ids = [rid for rid in run_ids if rid not in previous_ids]
+            if new_ids:
+                st.session_state["demo_run"] = new_ids[0]
+                st.session_state.pop("demo_previous_run_ids", None)
+        # A previously selected run may no longer exist in the returned list.
+        if st.session_state.get("demo_run") not in run_ids:
+            st.session_state["demo_run"] = run_ids[0]
+        run_id = st.selectbox("Run", run_ids, key="demo_run")
         _run_panel(token, run_id, any(r["run_id"] == run_id and r["status"] in ACTIVE for r in runs))
+
 
 
 def _run_panel(token: str, run_id: str, active: bool) -> None:
@@ -225,30 +246,61 @@ def _run_panel(token: str, run_id: str, active: bool) -> None:
         try:
             status = api_client.demo_status(token, run_id)
             state = api_client.demo_state(token, run_id)
-            points = api_client.demo_metrics(token, run_id) if state["snapshot"] else []
+            points = (
+                api_client.demo_metrics(token, run_id)
+                if state.get("snapshot")
+                else []
+            )
         except api_client.ApiError as exc:
             st.error(str(exc))
             return
-        if active and status["status"] not in ACTIVE:
-            st.rerun(scope="app")  # finished: re-enable the start button and stop polling
-        icon = {"submitting": "🟡", "queued": "🟠", "running": "🔵", "complete": "🟢",
-                "failed": "🔴", "cancelled": "⚫"}.get(status["status"], "•")
-        st.markdown(f"{icon} **{status['status']}** · Kaggle: `{status['kaggle_status'] or '—'}` · "
-                    f"mode: `{status.get('mode') or '—'}` · events: {status['event_count']} · "
-                    f"started {ui.fmt_ts(status['created_at'])} · last event {ui.fmt_ts(status['last_event_at'])}")
-        if status["status"] == "queued":
-            st.caption("Waiting for Kaggle to schedule the GPU batch; queue time is not guaranteed.")
-        elif status["status"] == "running":
-            st.caption(f"Phase: {PHASE_TEXT.get(status['phase'], status['phase'])}")
-        st.markdown(f"Model: `{status['model']}` · Validation result: {RESULT_TEXT[status['result']]}")
-        if status["error"]:
+
+        current_status = status.get("status", "unknown")
+
+        if active and current_status not in ACTIVE:
+            st.rerun(scope="app")
+
+        # Compact validation status
+        status_config = {
+            "submitting": ("🟡", "Submitting demo request"),
+            "queued": ("🟠", "Waiting for Kaggle GPU allocation"),
+            "running": ("🔵", "Validation in progress"),
+            "complete": ("🟢", "Validation completed"),
+            "failed": ("🔴", "Validation failed"),
+            "cancelled": ("⚫", "Validation cancelled"),
+        }
+
+        icon, description = status_config.get(
+            current_status,
+            ("⚪", "Status unknown")
+        )
+
+        if current_status == "running":
+            phase = status.get("phase")
+            description = PHASE_TEXT.get(phase, description)
+
+        result = status.get("result")
+        if current_status == "complete" and result:
+            description = RESULT_TEXT.get(result, description)
+
+        st.markdown(
+            f"{icon} **{current_status.upper()}** · {description}"
+        )
+
+        if status.get("error"):
             st.error(status["error"])
+
+        # Validation events
         st.markdown("#### Validation events")
         _events_table(token, run_id)
-        if state["scaling_status"] is None and not state["timeline"]:
-            if status["status"] in ACTIVE and status.get("mode"):
-                st.caption("Scaling experiment starts after model validation passes.")
+
+        # Scaling results
+        if (
+            state.get("scaling_status") is None
+            and not state.get("timeline")
+        ):
             return
+
         _scaling_overview(state)
         _live_metrics(points)
         _timeline(state)
