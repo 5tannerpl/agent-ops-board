@@ -35,6 +35,23 @@ class QueueReader:
             "producer_done": bool(run and run["producer_done"]), "state": run["state"] if run else None,
             "oldest_pending_seconds": round(db.now() - oldest, 1) if oldest else None}
 
+    def completed_unit_ids(self) -> set[str]:
+        if not self.run_id:
+            return set()
+
+        rows = self.conn.execute(
+            """
+            SELECT unit_id
+            FROM intake_units
+            WHERE test_run_id = ?
+            AND status = 'COMPLETED'
+            """,
+            (self.run_id,)
+        )
+
+        return {row[0] for row in rows}
+
+
     def actual_workers(self) -> int:
         """Workers that are really alive: not OFFLINE, fresh heartbeat and an existing OS process."""
         horizon = db.now() - config.UNHEALTHY_AFTER
@@ -301,22 +318,7 @@ class Autoscaler:
             return "SCALE_OUT" if starting else "SCALED_OUT"
         return "BASELINE"
 
-    def completed_unit_ids(self) -> set[str]:
-        if not self.run_id:
-            return set()
-
-        rows = self.conn.execute(
-            """
-            SELECT unit_id
-            FROM intake_units
-            WHERE test_run_id = ?
-            AND status = 'COMPLETED'
-            """,
-            (self.run_id,)
-        )
-
-        return {row[0] for row in rows}
-
+    
     def snapshot(self, q: dict | None = None) -> dict:
         q = q or self.last_counts or self.queue.counts()
         stats, rstats = self.stats_fn(), self.router.stats()
