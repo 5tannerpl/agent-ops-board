@@ -18,7 +18,6 @@ class Backend:
     def __init__(self, name: str, url: str):
         self.name, self.url, self.state = name, url.rstrip("/"), READY
         self.inflight = self.started = self.completed = self.failed = 0
-        self._unit_gpu_map: dict[str, str] = {}
 
     def view(self) -> dict:
         return {"state": self.state, "inflight": self.inflight, "requests": self.started,
@@ -32,6 +31,8 @@ class InferenceRouter:
         self._history: dict[str, dict] = {}  # counters survive removal so final evidence is kept
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
+        self._unit_gpu_map: dict[str, str] = {}
+        self._unit_gpu_map: dict[str, str] = {}
 
     # ---- membership ------------------------------------------------------
     def add_backend(self, name: str, url: str) -> None:
