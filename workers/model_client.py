@@ -7,6 +7,18 @@ from typing import Protocol
 import httpx
 
 import config
+from contextvars import ContextVar
+from contextlib import contextmanager
+
+_current_unit_id = ContextVar("aob_current_unit_id", default=None)
+
+@contextmanager
+def unit_context(unit_id: str):
+    token = _current_unit_id.set(unit_id)
+    try:
+        yield
+    finally:
+        _current_unit_id.reset(token)
 
 
 class LLMError(Exception):
@@ -52,7 +64,18 @@ class _HttpClient:
 
     def _post(self, path: str, body: dict, timeout: float) -> dict:
         try:
-            resp = httpx.post(self.base_url + path, json=body, timeout=timeout)
+            unit_id = _current_unit_id.get()
+
+            headers = {}
+            if unit_id:
+                headers["X-AOB-Unit-ID"] = str(unit_id)
+
+            resp = httpx.post(
+                self.base_url + path,
+                json=body,
+                headers=headers,
+                timeout=timeout,
+            )
         except httpx.TimeoutException as exc:
             raise LLMTimeout(str(exc) or "timeout") from exc
         except httpx.TransportError as exc:

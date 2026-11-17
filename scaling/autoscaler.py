@@ -301,9 +301,29 @@ class Autoscaler:
             return "SCALE_OUT" if starting else "SCALED_OUT"
         return "BASELINE"
 
+    def completed_unit_ids(self) -> set[str]:
+        if not self.run_id:
+            return set()
+
+        rows = self.conn.execute(
+            """
+            SELECT unit_id
+            FROM intake_units
+            WHERE test_run_id = ?
+            AND status = 'COMPLETED'
+            """,
+            (self.run_id,)
+        )
+
+        return {row[0] for row in rows}
+
     def snapshot(self, q: dict | None = None) -> dict:
         q = q or self.last_counts or self.queue.counts()
         stats, rstats = self.stats_fn(), self.router.stats()
+
+        units_by_gpu = self.router.unit_attribution(
+            self.queue.completed_unit_ids()
+        )
 
         def gpu(inst, idx):
             hw = stats.get(idx) or {}
@@ -320,5 +340,10 @@ class Autoscaler:
             "actual_workers": self.actual, "desired_workers": self.desired,
             "gpu_instances_ready": self._ready_instances(), "gpu0": gpu(self.gpu0, 0), "gpu1": gpu(self.gpu1, 1),
             "requests_by_gpu": per_gpu("completed"), "inflight_by_gpu": per_gpu("inflight"),
+            "units_by_gpu": {
+                "gpu0": units_by_gpu["gpu0"],
+                "gpu1": units_by_gpu["gpu1"],
+            },
+            "unattributed_units": units_by_gpu["unattributed"],
             "failed_by_gpu": per_gpu("failed"), "oldest_pending_seconds": q["oldest_pending_seconds"],
             "estimated_drain_seconds": None if drain == policy.INF else round(drain, 1)}

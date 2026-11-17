@@ -40,7 +40,10 @@ def chart_frames(points: list[dict]) -> dict[str, pd.DataFrame]:
         "Queue depth": pick({"pending": "Pending", "running": "Running"}),
         "Workers": pick({"actual_workers": "Actual workers", "desired_workers": "Desired workers"}),
         "GPU model instances ready": pick({"gpu_instances_ready": "Ready instances"}),
-        "Inference requests served": pick({"gpu0_requests": "GPU 0", "gpu1_requests": "GPU 1"}),
+        "Completed units by GPU": pick({
+            "gpu0_units": "GPU 0",
+            "gpu1_units": "GPU 1"
+        }),
         "GPU utilization %": pick({"gpu0_utilization_pct": "GPU 0", "gpu1_utilization_pct": "GPU 1"}),
         "GPU memory used (MB)": pick({"gpu0_memory_mb": "GPU 0", "gpu1_memory_mb": "GPU 1"}),
     }
@@ -57,17 +60,27 @@ def _events_table(token: str, run_id: str) -> None:
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 
-def _gpu_card(col, title: str, gpu: dict | None, requests, inflight) -> None:
+def _gpu_card(col, title: str, gpu: dict | None, units, inflight) -> None:
     gpu = gpu or {}
+
     with col.container(border=True):
-        st.markdown(f"**{title}** · `{gpu.get('state') or 'N/A'}` · port {na(gpu.get('port'))}")
+        st.markdown(
+            f"**{title}** · `{gpu.get('state') or 'N/A'}` "
+            f"· port {na(gpu.get('port'))}"
+        )
+
         a, b = st.columns(2)
-        a.metric("Memory used", na(gpu.get("memory_used_mb"), "{:,}", " MB"))
-        b.metric("Utilization", na(gpu.get("utilization_pct"), "{}", "%"))
-        a.metric("Requests served", na(requests))
+
+        a.metric(
+            "Memory used",
+            na(gpu.get("memory_used_mb"), "{:,}", " MB")
+        )
+        b.metric(
+            "Utilization",
+            na(gpu.get("utilization_pct"), "{}", "%")
+        )
+        a.metric("Units processed", na(units))
         b.metric("In flight", na(inflight))
-        if gpu.get("state") == "READY" and not requests:
-            st.caption("READY · 0 requests so far — not yet serving traffic")
 
 
 def _scaling_overview(state: dict) -> None:
@@ -85,10 +98,30 @@ def _scaling_overview(state: dict) -> None:
     c[5].metric("Failed", na(snap.get("failed")))
     st.markdown(f"Scaling state: **{state['scaling_state'] or 'N/A'}**"
                 + (" · 🔴 LIVE" if state["live"] else ""))
-    by_gpu, inflight = snap.get("requests_by_gpu") or {}, snap.get("inflight_by_gpu") or {}
+    by_gpu = snap.get("units_by_gpu") or {}
+    inflight = snap.get("inflight_by_gpu") or {}
+
     g0, g1 = st.columns(2)
-    _gpu_card(g0, "GPU 0", snap.get("gpu0"), by_gpu.get("gpu0"), inflight.get("gpu0"))
-    _gpu_card(g1, "GPU 1", snap.get("gpu1"), by_gpu.get("gpu1"), inflight.get("gpu1"))
+
+    _gpu_card(
+        g0, "GPU 0",
+        snap.get("gpu0"),
+        by_gpu.get("gpu0"),
+        inflight.get("gpu0")
+    )
+
+    _gpu_card(
+        g1, "GPU 1",
+        snap.get("gpu1"),
+        by_gpu.get("gpu1"),
+        inflight.get("gpu1")
+    )
+
+    if snap.get("unattributed_units", 0) > 0:
+        st.warning(
+            f"{snap['unattributed_units']} completed units "
+            "have no confirmed GPU attribution."
+        )
 
 
 def _live_metrics(points: list[dict]) -> None:
@@ -138,8 +171,15 @@ def _summary(state: dict) -> None:
         ("Confirmed worker levels", ", ".join(map(str, summary.get("confirmed_worker_levels") or [])) or "N/A"),
         ("Peak GPU instances → final", f"{na(summary.get('peak_gpu_instances'))} → "
                                         f"{na(summary.get('final_gpu_instances'))}"),
-        ("Inference requests GPU 0 / GPU 1", f"{na(summary.get('gpu0_inference_requests'))} / "
-                                             f"{na(summary.get('gpu1_inference_requests'))}"),
+        (
+            "Completed units GPU 0 / GPU 1",
+            f"{na(summary.get('gpu0_units_completed'))} / "
+            f"{na(summary.get('gpu1_units_completed'))}"
+        ),
+        (
+            "Unattributed completed units",
+            na(summary.get("unattributed_units"))
+        ),
         ("GPU 1 load time", na(summary.get("gpu1_load_seconds"), "{:.1f}", " s")),
         ("GPU 1 stopped cleanly", na(summary.get("gpu1_stopped_cleanly"))),
         ("Worker scale-out / scale-in", f"{na(summary.get('scale_out_seconds'), '{:.1f}', ' s')} / "

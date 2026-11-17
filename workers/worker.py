@@ -90,9 +90,10 @@ class Worker:
                     continue
                 with self._lock:
                     self._job = job
-                self.lease_lost.clear()
+                self.lease_lost.clear()                
                 try:
-                    self._process(job)
+                    with model_client.unit_context(job.unit_id):
+                        self._process(job)
                 except LeaseLost:
                     log_event(self.conn, self.worker_id, job.unit_id, None, "LEASE_LOST", job.attempt,
                               error_code="LEASE_LOST", message="lease reassigned; discarding work")

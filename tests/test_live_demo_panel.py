@@ -19,9 +19,14 @@ STATUS = {"status": "running", "kaggle_status": "running", "mode": "high_concurr
           "created_at": 1.0, "last_event_at": 2.0, "phase": "validated", "result": "passed", "model": "Qwen",
           "error": None}
 POINTS = [{"t": 0, "pending": 98, "running": 2, "actual_workers": 2, "desired_workers": 4, "gpu_instances_ready": 1,
-           "gpu0_requests": 0, "gpu1_requests": None, "gpu0_memory_mb": 4800},
+           "gpu0_requests": 0, "gpu1_requests": None, "gpu0_memory_mb": 4800,# New: unique completed business units
+            "gpu0_units": (snapshot.get("units_by_gpu") or {}).get("gpu0"),
+            "gpu1_units": (snapshot.get("units_by_gpu") or {}).get("gpu1")},
           {"t": 3, "pending": 90, "running": 4, "actual_workers": 4, "desired_workers": 4, "gpu_instances_ready": 1,
-           "gpu0_requests": 5, "gpu1_requests": None, "gpu0_memory_mb": 4800}]
+           "gpu0_requests": 5, "gpu1_requests": None, "gpu0_memory_mb": 4800},
+           # New: unique completed business units
+            "gpu0_units": (snapshot.get("units_by_gpu") or {}).get("gpu0"),
+            "gpu1_units": (snapshot.get("units_by_gpu") or {}).get("gpu1")]
 
 
 def app():

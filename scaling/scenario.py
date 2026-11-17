@@ -188,6 +188,17 @@ def run_scenario(settings: ScalingSettings, env: Environment, emit) -> dict:
         summary = _summarize(settings, run_id, conn, reader, autoscaler, router, gpu0, gpu1, publisher, finished,
                              gpu1_available, time.monotonic() - started)
         publish("scaling_metrics_snapshot", autoscaler.snapshot())
+        attributed_total = (
+            summary["gpu0_units_completed"]
+            + summary["gpu1_units_completed"]
+            + summary["unattributed_units"]
+        )
+
+        if attributed_total != summary["completed"]:
+            raise ScenarioError(
+                "UNIT_ATTRIBUTION_MISMATCH",
+                f"attributed={attributed_total}, completed={summary['completed']}"
+            )
         publish("scaling_demo_completed", summary)
         return summary
     except Exception as exc:
@@ -230,6 +241,20 @@ def _summarize(s, run_id, conn, reader, a, router, gpu0, gpu1, publisher, finish
     gpu1_serving = gpu1.state == gpu_manager.READY and gpu1.healthy()
     final_gpu_instances = int(gpu0.healthy()) + int(gpu1_serving)
     rstats = router.stats()
+    completed_unit_ids = {
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT unit_id
+            FROM intake_units
+            WHERE test_run_id = ?
+            AND status = 'COMPLETED'
+            """,
+            (run_id,)
+        )
+    }
+
+    units_by_gpu = router.unit_attribution(completed_unit_ids)
     gpu1_requests = rstats.get("gpu1", {}).get("completed", 0)
     evidence = {
         "total": s.units, "completed": completed, "failed": counts["failed"] + counts["manual_review"],
@@ -254,6 +279,9 @@ def _summarize(s, run_id, conn, reader, a, router, gpu0, gpu1, publisher, finish
         "gpu0_inference_requests": evidence["gpu0_requests"], "gpu1_inference_requests": gpu1_requests,
         "gpu1_stopped_cleanly": a.gpu1_stopped_cleanly, "final_workers": final_workers,
         "final_gpu_instances": final_gpu_instances,
+        "gpu0_units_completed": units_by_gpu["gpu0"],
+        "gpu1_units_completed": units_by_gpu["gpu1"],
+        "unattributed_units": units_by_gpu["unattributed"],
         "scale_out_seconds": span(a.t_scale_out_start, a.t_scale_out_done),
         "worker_scale_out_seconds": span(a.t_scale_out_start, a.t_scale_out_done),
         "gpu1_load_seconds": a.gpu1_load_seconds, "scale_in_seconds": span(a.t_scale_in_start, scale_in_end),
