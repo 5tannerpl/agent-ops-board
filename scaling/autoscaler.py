@@ -59,6 +59,7 @@ class QueueReader:
         return sum(1 for r in rows if r["pid"] and _pid_alive(r["pid"]))
 
 
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
