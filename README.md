@@ -143,7 +143,7 @@ publish **only** `POST /api/events` (the existing `/v1/*` routes are unauthentic
 | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `GET /api/me`                                                                                   | Auth0 + whitelist (401 / 403 / 200)                                                                              |
 | `POST /api/demo/start`                                                                          | Auth0 + whitelist; 202 `{run_id, status: "submitting"}`, 409 if a batch is active, 429 when rate-limited         |
-| `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/events?after_id=&types=` | Auth0 + owner of the run (404 otherwise); `after_id` is the server receive-order cursor                          |
+| `GET /api/demo/runs`, `/api/demo/{run_id}/status`, `/api/demo/{run_id}/validation`                | Auth0 + owner of the run (404 otherwise); validation returns only allowlisted event summaries                     |
 | `GET /api/demo/{run_id}/state`, `/metrics`, `/summary`                                          | Same; live Workers/GPU/queue snapshot + timeline, time series, final evidence                                    |
 | `POST /api/events`                                                                              | `X-AOB-Timestamp` + `X-AOB-Signature: sha256=HMAC(run_key, "<ts>.<body>")`; deduplicated by `(run_id, event_id)` |
 
@@ -151,6 +151,10 @@ The status response also carries `phase` (`initializing | loading_model | model_
 `null` until an event arrives, never guessed), `model`, `last_event_*` and `result`
 (`pending | passed | failed | incomplete`). Kaggle `complete` without the final passing
 `model_validation_completed` event is `incomplete`, not a pass.
+
+Scaling read endpoints sanitize historical payloads before responding: only allowlisted plan/snapshot fields,
+approved GPU identifiers (`gpu0`, `gpu1`), safe numeric values, and enumerated summary/failure reason codes are
+returned. Raw exception text from event payloads is never emitted in timeline labels or failure messages.
 
 Run states: `submitting → queued → running → complete`, or `failed` / `cancelled`. Only one batch is active at a
 time (enforced in SQLite, so it survives restarts); Kaggle status is polled through the status endpoints, and runs

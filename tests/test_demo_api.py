@@ -11,6 +11,7 @@ import demo_auth
 import kaggle_launcher
 import demo_service
 import demo_store as store
+from api.response_models import error_code
 from api.private_app import app as private_app
 from api.public_ingress import app as ingress_app
 
@@ -92,7 +93,8 @@ def test_start_is_exclusive_and_reports_real_status(demo):
     # The background submission already ran: accepted push = queued, not GPU ready.
     assert demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()["status"] == "queued"
     again = demo.post("/api/demo/start", headers=auth("auth0|bob"))
-    assert again.status_code == 409 and again.headers["x-active-run"] == run_id
+    assert again.status_code == 409 and "x-active-run" not in {k.lower() for k in again.headers}
+    assert run_id not in again.text
     assert len(demo.pushed) == 1
 
 
@@ -250,3 +252,30 @@ def test_repository_notebook_stages_and_reports_all_phases(demo):
     for event_type in demo_service.PHASES:
         assert f'"{event_type}"' in code
     assert "webhook.site" not in code
+
+
+def test_validation_status_is_sanitized_for_historical_rows(demo):
+    run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
+    conn = store.connect()
+    conn.execute(
+        "INSERT INTO demo_events(run_id, event_id, event_type, payload, event_ts, received_at) VALUES(?,?,?,?,?,?)",
+        (run_id, "evt-injected-1", "model_validation_completed", json.dumps({"status": "passed"}), 1.0, 1.0),
+    )
+    conn.execute(
+        "INSERT INTO demo_events(run_id, event_id, event_type, payload, event_ts, received_at) VALUES(?,?,?,?,?,?)",
+        (run_id, "evt-injected-2", "model_validation_completed", json.dumps({"status": "leak:token"}), 2.0, 2.0),
+    )
+    conn.execute(
+        "INSERT INTO demo_events(run_id, event_id, event_type, payload, event_ts, received_at) VALUES(?,?,?,?,?,?)",
+        (run_id, "evt-injected-3", "model_validation_started", json.dumps(["not", "a", "dict"]), 3.0, 3.0),
+    )
+    conn.commit()
+    conn.close()
+    items = demo.get(f"/api/demo/{run_id}/validation", headers=auth()).json()["items"]
+    assert [e["status"] for e in items] == ["passed", None, None]
+
+
+def test_error_code_mapping_is_allowlist_only():
+    assert error_code("KAGGLE_SUBMISSION_FAILED") == "KAGGLE_SUBMISSION_FAILED"
+    assert error_code("kaggle kernels push failed: boom") == "KAGGLE_SUBMISSION_FAILED"
+    assert error_code("sensitive stacktrace with token") == "UNKNOWN_ERROR"

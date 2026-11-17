@@ -208,3 +208,82 @@ def test_bootstrap_reports_environment_problems_instead_of_skipping_silently(tmp
     with pytest.raises(FileNotFoundError):
         bootstrap.run(ns)
     assert sent[0][0] == "scaling_demo_failed" and sent[0][1]["phase"] == "environment"
+
+
+def test_scaling_views_sanitize_malicious_historical_payloads(demo):
+    run_id = start(demo, mode="high_concurrency")
+    conn = store.connect()
+    now = 1000.0
+    raw_events = [
+        ("evt-raw-0001", "scaling_demo_started", {
+            "mode": "high_concurrency", "planned_units": 150, "secret": "do-not-leak"
+        }),
+        ("evt-raw-0002", "scaling_controller_error", {
+            "error": "RuntimeError: token=super-secret-value", "message": "traceback..."
+        }),
+        ("evt-raw-0003", "scaling_metrics_snapshot", {
+            "pending": 80, "running": 4, "completed": 10, "failed": 0, "actual_workers": 4, "desired_workers": 8,
+            "gpu_instances_ready": 1, "requests_by_gpu": {"gpu0": 16, "gpu1": 0, "gpu9": 999},
+            "inflight_by_gpu": {"gpu0": 3, "gpu1": 1, "gpuX": 99}, "units_by_gpu": {"gpu0": 8, "gpu1": 2},
+            "gpu0": {"state": "READY", "memory_used_mb": 4200, "utilization_pct": 77, "port": 8080},
+            "gpu1": {"state": "STOPPED", "memory_used_mb": -1, "utilization_pct": 200},
+        }),
+        ("evt-raw-0004", "scaling_demo_completed", {
+            "status": "degraded", "reasons": ["GPU1_NO_INFERENCE_REQUESTS", "LEAK=token", "WORKERS_8_NOT_CONFIRMED"],
+            "completed": 100, "total": 100, "throughput_per_min": 12.5
+        }),
+        ("evt-raw-0005", "scaling_demo_failed", {
+            "error_code": "ValueError", "phase": "router;drop table", "message": "internal stack with token"
+        }),
+    ]
+    for event_id, event_type, payload in raw_events:
+        conn.execute(
+            "INSERT INTO demo_events(run_id, event_id, event_type, payload, event_ts, received_at) VALUES(?,?,?,?,?,?)",
+            (run_id, event_id, event_type, json.dumps(payload), now, now),
+        )
+        now += 1
+    conn.commit()
+    conn.close()
+
+    state = demo.get(f"/api/demo/{run_id}/state", headers=auth()).json()
+    assert state["plan"] == {"mode": "high_concurrency", "planned_units": 150}
+    assert "token=super-secret-value" not in " ".join(e["label"] for e in state["timeline"])
+    controller = next(e for e in state["timeline"] if e["event_type"] == "scaling_controller_error")
+    assert controller["label"] == "Controller error: SCALING_FAILED"
+    assert state["summary"]["reasons"] == ["GPU1_NO_INFERENCE_REQUESTS", "WORKERS_8_NOT_CONFIRMED"]
+    assert state["failure"] == {
+        "error_code": "SCALING_FAILED",
+        "phase": "summary",
+        "message": "Scaling execution failed.",
+    }
+    assert state["snapshot"]["requests_by_gpu"] == {"gpu0": 16, "gpu1": 0}
+    assert "gpu9" not in json.dumps(state["snapshot"])
+
+    points = demo.get(f"/api/demo/{run_id}/metrics", headers=auth()).json()["points"]
+    assert len(points) == 1
+    assert points[0]["gpu0_requests"] == 16 and points[0]["gpu1_requests"] == 0
+    assert points[0]["gpu1_utilization_pct"] is None  # invalid 200 was dropped
+
+    summary = demo.get(f"/api/demo/{run_id}/summary", headers=auth()).json()
+    assert summary["summary"]["reasons"] == ["GPU1_NO_INFERENCE_REQUESTS", "WORKERS_8_NOT_CONFIRMED"]
+    assert summary["failure"]["error_code"] == "SCALING_FAILED"
+
+
+def test_scaling_views_handle_non_dict_historical_payloads(demo):
+    run_id = start(demo, mode="high_concurrency")
+    conn = store.connect()
+    conn.execute(
+        "INSERT INTO demo_events(run_id, event_id, event_type, payload, event_ts, received_at) VALUES(?,?,?,?,?,?)",
+        (run_id, "evt-raw-nondict-1", "scaling_demo_started", json.dumps(["bad", "payload"]), 1.0, 1.0),
+    )
+    conn.execute(
+        "INSERT INTO demo_events(run_id, event_id, event_type, payload, event_ts, received_at) VALUES(?,?,?,?,?,?)",
+        (run_id, "evt-raw-nondict-2", "scaling_metrics_snapshot", json.dumps("oops"), 2.0, 2.0),
+    )
+    conn.commit()
+    conn.close()
+
+    state = demo.get(f"/api/demo/{run_id}/state", headers=auth()).json()
+    assert state["plan"] is None and state["snapshot"] is None
+    points = demo.get(f"/api/demo/{run_id}/metrics", headers=auth()).json()["points"]
+    assert len(points) == 1 and points[0]["pending"] is None

@@ -23,6 +23,7 @@ _VALIDATION_EVENTS = (
     "notebook_started", "environment_ready", "model_located", "model_ready", "model_validation_started",
     "worker_validation_completed", "modelcheck_completed", "model_validation_completed",
 )
+_VALIDATION_STATUSES = {"passed", "failed"}
 
 
 def get_conn():
@@ -45,6 +46,13 @@ def run_view(run: dict) -> dict:
         "updated_at": run["updated_at"],
         "finished_at": run["finished_at"],
     }
+
+
+def _validation_status(payload) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    status = payload.get("status")
+    return status if isinstance(status, str) and status in _VALIDATION_STATUSES else None
 
 
 def owned_run(conn, run_id: str, user: dict) -> dict:
@@ -73,8 +81,8 @@ def start_demo(background: BackgroundTasks, body: StartIn | None = None,
     units = body.units or (100 if body.mode == "high_concurrency" else 10)
     try:
         run = demo_service.start_run(conn, user["sub"], body.mode, units)
-    except store.Conflict as exc:
-        raise HTTPException(409, "A demo is already queued or running", headers={"X-Active-Run": exc.run_id})
+    except store.Conflict:
+        raise HTTPException(409, "A demo is already queued or running")
     except store.RateLimited as exc:
         raise HTTPException(429, str(exc), headers={"Retry-After": str(exc.retry_after)})
     background.add_task(demo_service.submit_run, run["run_id"])
@@ -114,7 +122,7 @@ def run_validation(run_id: str, user: dict = Depends(demo_auth.require_demo_acce
     owned_run(conn, run_id, user)
     events = store.list_events(conn, run_id, 0, config.EVENT_MAX_PER_RUN, _VALIDATION_EVENTS)
     return {"items": [{"id": e["id"], "received_at": e["received_at"], "event_type": e["event_type"],
-                       "status": e["payload"].get("status")} for e in events]}
+                       "status": _validation_status(e["payload"])} for e in events]}
 
 
 class EventIn(BaseModel):
