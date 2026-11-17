@@ -49,7 +49,8 @@ def test_existing_five_events_and_old_runs_still_render(demo):
     run_id = start(demo)
     for n, t in enumerate(["notebook_started", "model_validation_started", "worker_validation_completed",
                            "modelcheck_completed", "model_validation_completed"], start=1):
-        emit(demo, run_id, n, t, **({"status": "passed"} if t != "notebook_started" else {}))
+        emit(demo, run_id, n, t, **({"status": "running" if t == "model_validation_started" else "passed"}
+                                    if t != "notebook_started" else {}))
     state = demo.get(f"/api/demo/{run_id}/state", headers=auth()).json()
     assert state["scaling_status"] is None and state["snapshot"] is None and state["timeline"] == []
     status = demo.get(f"/api/demo/{run_id}/status", headers=auth()).json()

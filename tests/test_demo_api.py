@@ -53,10 +53,14 @@ def demo(tmp_path, monkeypatch):
     return client
 
 
+DEFAULT_PAYLOADS = {"model_validation_started": {"status": "running", "test_runs": 10},
+                    "model_validation_completed": {"status": "passed", "backend": "llamacpp", "api_health": 200}}
+
+
 def signed_post(client, run_id, event_id="evt-00000001", event_type="model_validation_started",
                 ts=None, key_run_id=None, **extra):
     body = json.dumps({"event_id": event_id, "run_id": run_id, "event_type": event_type,
-                       "payload": {"seconds": 1.5}, **extra}).encode()
+                       "payload": DEFAULT_PAYLOADS.get(event_type, {}), **extra}).encode()
     stamp = str(int(ts or time.time()))
     sig = demo_auth.sign_event(key_run_id or run_id, stamp, body)
     return client.ingress.post("/api/events", content=body, headers={

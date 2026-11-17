@@ -153,6 +153,31 @@ def _code_cell(source: str) -> dict:
             "outputs": [], "source": source.splitlines(keepends=True)}
 
 
+_RAW_OUTPUT_FIELD_RE = re.compile(
+    r""",?[ \t]*\n?[ \t]*["'](?:stdout|stderr)["']\s*:\s*result\.(?:stdout|stderr)(?:\[[^\]\n]*\])?""")
+_LOCAL_RUN_ID_RE = re.compile(r"(?m)^RUN_ID\s*=\s*str\(\s*uuid\.uuid4\(\)\s*\)[ \t]*$")
+
+
+def _harden_step6(source: str) -> tuple[str, bool]:
+    """Keep raw stdout/stderr out of events and tie Step 6 to the AOB-injected run ID.
+
+    Fails closed (False) when the result is not valid Python or still sends raw output / a local UUID.
+    """
+    result = _RAW_OUTPUT_FIELD_RE.sub("", source)
+    result = _LOCAL_RUN_ID_RE.sub("RUN_ID = AOB_RUN_ID", result)
+    try:
+        tree = ast.parse(result)
+    except SyntaxError:
+        return source, False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict) and any(
+                isinstance(k, ast.Constant) and k.value in ("stdout", "stderr") for k in node.keys):
+            return source, False
+    if re.search(r"\buuid\.uuid4\(", result):
+        return source, False
+    return result, True
+
+
 def _adapt_old_step6(source: str) -> tuple[str, bool]:
     """Replace ONLY the old HTTPS `send_event` function with a signed adapter.
 
@@ -178,7 +203,7 @@ def _adapt_old_step6(source: str) -> tuple[str, bool]:
                             "modelcheck_completed", "model_validation_completed")):
         return source, False
     if existing_bridge:
-        return source, True
+        return _harden_step6(source)
     lines = source.splitlines(keepends=True)
     replacement = ("def send_event(event_type, data):\n"
                    "    global sent, failed\n"
@@ -199,7 +224,8 @@ def _adapt_old_step6(source: str) -> tuple[str, bool]:
     if re.search(r"\bWEBHOOK_URL\b", result):
         # The previous receiver is referenced elsewhere; do not silently produce a broken batch.
         return source, False
-    return result, True
+    hardened, ok = _harden_step6(result)
+    return (hardened, True) if ok else (source, False)
 
 
 def _select_notebook(directory: Path, meta: dict) -> Path:

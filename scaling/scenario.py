@@ -21,6 +21,7 @@ from scaling.events import EventPublisher
 from scaling.gpu_manager import LlamaInstance
 from scaling.inference_router import InferenceRouter
 from scaling.settings import ScalingSettings
+from security.event_text import safe_text
 from storage import db
 
 MODEL_NAME = "Qwen3-4B-Instruct-2507"
@@ -86,7 +87,7 @@ def _ensure_gpu0(env: Environment, gpu0: LlamaInstance, stats: dict) -> None:
         if not _wait(lambda: not gpu_manager.port_open(gpu0.port), 30):
             raise ScenarioError("GPU0_NOT_ISOLATED", "could not free the GPU 0 port")
     if not gpu0.start():
-        raise ScenarioError("GPU0_START_FAILED", f"{gpu0.error} | {gpu0.error_log_tail()}")
+        raise ScenarioError("GPU0_START_FAILED", gpu0.error)
 
 
 def _terminate(proc: subprocess.Popen | None, timeout: float = 30.0) -> None:
@@ -203,7 +204,7 @@ def run_scenario(settings: ScalingSettings, env: Environment, emit) -> dict:
         return summary
     except Exception as exc:
         code = exc.code if isinstance(exc, ScenarioError) else type(exc).__name__
-        message = (exc.message if isinstance(exc, ScenarioError) else str(exc))[:300]
+        message = safe_text(exc.message if isinstance(exc, ScenarioError) else exc, 300)
         failure = {"status": "failed", "phase": phase, "error_code": code, "message": message, "mode": settings.mode}
         publish("scaling_demo_failed", failure)
         return failure

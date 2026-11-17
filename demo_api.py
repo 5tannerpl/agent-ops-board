@@ -1,5 +1,6 @@
 """Live-demo private API and public event ingress."""
 import json
+import logging
 import re
 from typing import Literal
 
@@ -13,8 +14,9 @@ import demo_scaling
 import demo_service
 import demo_store as store
 from api.response_models import error_code
-from security.event_schemas import validate_payload
+from security.event_schemas import rejection_diagnostics, validate_payload
 
+log = logging.getLogger("demo_api")
 private_router = APIRouter()
 ingress_router = APIRouter()
 _EVENT_TYPE = r"^[a-z0-9][a-z0-9_.-]{0,63}$"
@@ -133,6 +135,12 @@ class EventIn(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+def _log_rejection(event_type, exc: Exception, scope: str) -> None:
+    for item in rejection_diagnostics(event_type, exc, scope):
+        log.warning("event rejected: event_type=%s field=%s error_type=%s", item["event_type"], item["field"],
+                    item["error_type"])
+
+
 def ingest_event(event: EventIn) -> str:
     conn = store.connect()
     try:
@@ -181,7 +189,12 @@ async def receive_event(request: Request):
         raise HTTPException(401, "invalid event signature")
     try:
         event = EventIn.model_validate(raw)
+    except ValidationError as exc:
+        _log_rejection(raw.get("event_type"), exc, "envelope")
+        raise HTTPException(422, "invalid event")
+    try:
         event.payload = validate_payload(event.event_type, event.payload)
-    except (ValidationError, ValueError):
+    except (ValidationError, ValueError) as exc:
+        _log_rejection(event.event_type, exc, "payload")
         raise HTTPException(422, "invalid event")
     return {"status": await run_in_threadpool(ingest_event, event)}

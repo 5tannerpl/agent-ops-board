@@ -12,6 +12,7 @@ from pathlib import Path
 
 from scaling.scenario import Environment, run_scenario
 from scaling.settings import for_mode
+from security.event_text import safe_text
 
 RUNTIME_DIR = Path("/kaggle/working/aob-runtime")
 CUDA_DIR = Path("/kaggle/working/llama-cuda")
@@ -67,7 +68,7 @@ def run(ns: dict) -> dict:
         server, model = _find_llama_server(ns), _find_model(ns)
     except Exception as exc:  # report it: a silent skip would look like a pass
         emit("scaling_demo_failed", {"status": "failed", "phase": "environment", "mode": settings.mode,
-                                     "error_code": type(exc).__name__, "message": str(exc)[:300]})
+                                     "error_code": type(exc).__name__, "message": safe_text(exc, 300)})
         raise
     llama_env = {**os.environ, "LD_LIBRARY_PATH": _library_path(server)}
     os.environ["LD_LIBRARY_PATH"] = llama_env["LD_LIBRARY_PATH"]

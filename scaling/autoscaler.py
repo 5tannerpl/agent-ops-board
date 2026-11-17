@@ -11,6 +11,7 @@ from collections import deque
 import config
 from scaling import gpu_manager, policy
 from scaling.settings import ScalingSettings
+from security.event_text import safe_text
 from storage import db
 
 ACTIVE_UNIT = ("PENDING", "WAITING_RETRY")
@@ -121,7 +122,7 @@ class Autoscaler:
             try:
                 self.tick()
             except Exception as exc:  # a bad reading must not kill the controller
-                self.publish("scaling_controller_error", {"error": type(exc).__name__, "message": str(exc)[:200]})
+                self.publish("scaling_controller_error", {"error": type(exc).__name__, "message": safe_text(exc)})
             self._stop.wait(self.s.poll_seconds)
 
     def gpu_busy(self) -> bool:
@@ -239,7 +240,7 @@ class Autoscaler:
         self.gpu1_error = code
         self._gpu_cooldown_until = self.clock() + self.s.gpu_start_cooldown_seconds
         self.publish("gpu_instance_failed", {"gpu_id": 1, "port": self.gpu1.port, "error_code": code,
-                                             "message": (message or "")[:200], "attempt": self.gpu1_attempts,
+                                             "message": safe_text(message or ""), "attempt": self.gpu1_attempts,
                                              "status": "failed"})
 
     def _start_gpu1(self, reason: str) -> None:
@@ -253,7 +254,7 @@ class Autoscaler:
                 return self._fail_gpu1("GPU1_INSUFFICIENT_MEMORY", f"{free} MB free on GPU 1")
         self._baseline_gpu1_mb = (gpu or {}).get("memory_used_mb")
         if not self.gpu1.start():
-            return self._fail_gpu1("GPU1_START_FAILED", f"{self.gpu1.error} | {self.gpu1.error_log_tail()}")
+            return self._fail_gpu1("GPU1_START_FAILED", self.gpu1.error)
         bound = gpu_manager.gpu_index_of_pid(self.gpu1.pid) if self.gpu1.pid else None
         if bound is not None and bound != 1:
             self.gpu1.stop()

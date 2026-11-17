@@ -17,6 +17,7 @@ from scaling.gpu_manager import LlamaInstance
 from scaling.inference_router import InferenceRouter
 from scaling.scenario import Environment, run_scenario
 from scaling.settings import for_mode, tuned
+from tests.test_event_contract import assert_contract
 
 HIGH = for_mode("high_concurrency")
 LIGHT = for_mode("light")
@@ -170,6 +171,9 @@ class StubQueue:
     def actual_workers(self):
         return self.workers
 
+    def completed_unit_ids(self):
+        return set()
+
 
 class Clock:
     t = 1000.0
@@ -210,12 +214,13 @@ def test_autoscaler_steps_workers_2_4_8_2_from_queue_readings():
     snaps = [d for t, d in events if t == "scaling_metrics_snapshot"]
     assert snaps and {"actual_workers", "desired_workers", "requests_by_gpu", "gpu1"} <= set(snaps[0])
     assert any(s["scaling_state"] == "SCALE_OUT" for s in snaps) or any(s["actual_workers"] == 8 for s in snaps)
+    assert_contract(events)
 
 
 def test_failed_gpu1_start_is_reported_and_never_marked_ready(tmp_path):
     events, queue = [], StubQueue()
     gpu1 = LlamaInstance("gpu1", 1, free_port(), fake_llama_binary(tmp_path), tmp_path / "m.gguf", "alias",
-                         tmp_path / "gpu1.log", env={**os.environ, "FAKE_LLAMA_FAIL_DEVICE": "CUDA1"},
+                         tmp_path / "gpu1.log", env={**os.environ, "FAKE_LLAMA_FAIL_DEVICE": "CUDA0"},
                          startup_timeout=10)
     auto, clock = build_autoscaler(tuned(HIGH, sustained_backlog_seconds=2, predicted_drain_gt_seconds=1), gpu1,
                                    queue, events, available=True)
@@ -229,6 +234,9 @@ def test_failed_gpu1_start_is_reported_and_never_marked_ready(tmp_path):
     assert "gpu_instance_starting" in types and "gpu_instance_failed" in types
     assert "gpu_instance_ready" not in types and not auto.gpu1_ever_ready
     assert auto.gpu1_error == "GPU1_START_FAILED" and gpu1.state == gpu_manager.FAILED
+    assert_contract(events)
+    failure = next(d for t, d in events if t == "gpu_instance_failed")
+    assert "\n" not in failure["message"] and failure["error_code"] == "GPU1_START_FAILED"
 
 
 # ---- end to end: real processes, fake llama-server ----------------------------------------------
@@ -262,6 +270,7 @@ def test_dual_gpu_scaling_end_to_end_with_fake_llama(tmp_path, monkeypatch):
 
     types = [t for t, _ in events]
     assert summary["status"] == "passed", summary
+    assert_contract(events)
     assert types[0] == "gpu_instance_ready" and "scaling_demo_started" in types and types[-1] == "scaling_demo_completed"
     moves = [(d["from"], d["to"]) for t, d in events if t == "worker_scaling_requested"]
     assert moves == [(2, 4), (4, 8), (8, 2)]
@@ -287,3 +296,4 @@ def test_scenario_reports_failure_when_no_gpu_is_visible(tmp_path, monkeypatch):
     result = run_scenario(LIGHT, env, lambda t, d: events.append((t, d)) or True)
     assert result["status"] == "failed" and result["error_code"] == "GPU_UNAVAILABLE"
     assert [t for t, _ in events] == ["scaling_demo_failed"]
+    assert_contract(events)
