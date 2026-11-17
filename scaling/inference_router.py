@@ -18,6 +18,7 @@ class Backend:
     def __init__(self, name: str, url: str):
         self.name, self.url, self.state = name, url.rstrip("/"), READY
         self.inflight = self.started = self.completed = self.failed = 0
+        self._unit_gpu_map: dict[str, str] = {}
 
     def view(self) -> dict:
         return {"state": self.state, "inflight": self.inflight, "requests": self.started,
@@ -67,6 +68,37 @@ class InferenceRouter:
             out = {n: dict(v) for n, v in self._history.items()}
             out.update({n: b.view() for n, b in self._backends.items()})
         return out
+    
+    def unit_attribution(self, completed_unit_ids) -> dict:
+        """
+        Count unique completed units by their last successful
+        inference backend.
+        """
+        ids = set(completed_unit_ids)
+
+        with self._lock:
+            attribution = {
+                uid: gpu
+                for uid, gpu in self._unit_gpu_map.items()
+                if uid in ids
+            }
+
+        gpu0 = sum(1 for gpu in attribution.values() if gpu == "gpu0")
+        gpu1 = sum(1 for gpu in attribution.values() if gpu == "gpu1")
+
+        return {
+            "gpu0": gpu0,
+            "gpu1": gpu1,
+            "unattributed": len(ids) - len(attribution),
+            "total": len(ids),
+        }
+
+    def _record_unit_success(self, unit_id: str | None, gpu: str):
+        if not unit_id:
+            return
+
+        with self._lock:
+            self._unit_gpu_map[unit_id] = gpu
 
     # ---- proxying --------------------------------------------------------
     def _acquire(self) -> Backend | None:
@@ -87,7 +119,14 @@ class InferenceRouter:
             else:
                 backend.failed += 1
 
-    def forward(self, method: str, path: str, body: bytes | None, headers: dict) -> tuple[int, dict, bytes]:
+    def forward(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None,
+        headers: dict,
+        unit_id: str | None = None,
+    ) -> tuple[int, dict, bytes]:
         backend = self._acquire()
         if backend is None:
             return 503, {"Content-Type": "application/json"}, json.dumps(
@@ -101,6 +140,8 @@ class InferenceRouter:
                 resp = conn.getresponse()
                 data = resp.read()
                 ok = resp.status < 500
+                if 200 <= resp.status < 300:
+                    self._record_unit_success(unit_id, backend.name)
                 out_headers = {k: v for k, v in resp.getheaders() if k.lower() not in _HOP}
                 return resp.status, out_headers, data
             finally:
@@ -113,7 +154,7 @@ class InferenceRouter:
                 {"error": {"message": "backend unreachable", "type": "bad_gateway"}}).encode()
         finally:
             self._release(backend, ok)
-
+    
     # ---- lifecycle -------------------------------------------------------
     def start(self) -> None:
         router = self
@@ -139,8 +180,22 @@ class InferenceRouter:
                                                               "backends": ready})
                 length = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(length) if length else None
-                fwd = {"Content-Type": self.headers.get("Content-Type", "application/json")}
-                self._send(*router.forward(method, self.path, body, fwd))
+                fwd = {
+                    "Content-Type": self.headers.get(
+                        "Content-Type",
+                        "application/json"
+                    )
+                }
+
+                unit_id = self.headers.get("X-AOB-Unit-ID")
+
+                self._send(*router.forward(
+                    method,
+                    self.path,
+                    body,
+                    fwd,
+                    unit_id=unit_id,
+                ))
 
             def do_GET(self):  # noqa: N802
                 self._proxy("GET")
