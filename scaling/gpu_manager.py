@@ -99,17 +99,41 @@ class LlamaInstance:
     def healthy(self) -> bool:
         return http_ok(self.url + "/health")
 
+    
     def command_and_env(self) -> tuple[list[str], dict]:
-        cmd = [self.llama_server, "-m", self.model_path, "--host", "127.0.0.1", "--port", str(self.port),
-               "-ngl", "99", "-c", str(self.ctx), "--alias", self.model_alias]
+        cmd = [
+            self.llama_server,
+            "-m", self.model_path,
+            "--host", "127.0.0.1",
+            "--port", str(self.port),
+            "-ngl", "99",
+            "-c", str(self.ctx),
+            "--alias", self.model_alias,
+        ]
+
         env = dict(self.env)
+
+        # Expose only the intended physical GPU to this process.
+        env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
+
         if supports_device_flag(self.llama_server, env):
-            cmd += ["--device", f"CUDA{self.gpu_id}", "--split-mode", "none"]
-            self.pinned_via = f"--device CUDA{self.gpu_id}"
+            # Within the restricted CUDA namespace, the
+            # selected GPU is always logical CUDA0.
+            cmd += [
+                "--device", "CUDA0",
+                "--split-mode", "none",
+            ]
+            self.pinned_via = (
+                f"CUDA_VISIBLE_DEVICES={self.gpu_id}, "
+                "--device CUDA0"
+            )
         else:
-            env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
-            self.pinned_via = f"CUDA_VISIBLE_DEVICES={self.gpu_id}"
+            self.pinned_via = (
+                f"CUDA_VISIBLE_DEVICES={self.gpu_id}"
+            )
+
         return cmd, env
+
 
     def adopt(self, pid: int | None = None) -> None:
         self.owned, self.pid, self.state, self.pinned_via = False, pid, READY, "adopted"

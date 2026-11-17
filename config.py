@@ -68,7 +68,7 @@ KAGGLE_ACCELERATOR = os.environ.get("AOB_KAGGLE_ACCELERATOR", "NvidiaTeslaT4")
 KAGGLE_PUSH_TIMEOUT = float(os.environ.get("AOB_KAGGLE_PUSH_TIMEOUT", "120"))
 
 DEMO_MIN_INTERVAL_SECONDS = float(os.environ.get("AOB_DEMO_MIN_INTERVAL", "300"))  # per user
-DEMO_MAX_RUNS_PER_DAY = int(os.environ.get("AOB_DEMO_MAX_RUNS_PER_DAY", "15"))  # per user
+DEMO_MAX_RUNS_PER_DAY = int(os.environ.get("AOB_DEMO_MAX_RUNS_PER_DAY", "35"))  # per user
 DEMO_MAX_RUN_SECONDS = float(os.environ.get("AOB_DEMO_MAX_RUN_SECONDS", str(3 * 3600)))
 DEMO_SUBMIT_TIMEOUT_SECONDS = KAGGLE_PUSH_TIMEOUT + 60
 DEMO_SYNC_INTERVAL_SECONDS = float(os.environ.get("AOB_DEMO_SYNC_INTERVAL", "15"))
