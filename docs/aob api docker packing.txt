@@ -1,0 +1,64 @@
+Implemented AOB Phase 1 Oracle ARM64 packaging.
+
+Changes
+Added ARM64-compatible production Dockerfile
+Python 3.12 slim base
+Pinned runtime dependencies including Kaggle CLI
+Non-root aob user
+No Streamlit production dependency
+No sensitive files copied into the image
+Added restrictive .dockerignore
+Excludes databases, credentials, .env, whitelist contents, notebooks, virtual environments, Git metadata, and tests
+Added pinned requirements.lock
+Added OCI deployment files:
+compose.yaml
+.env.example
+README.md
+Updated config.py
+Supports AOB_EVENT_SECRET_FILE
+Retains AOB_EVENT_SECRET for development
+Production requires a readable file-based secret
+Updated production_config.py
+Enforces file-based event secrets in production
+Preserved Auth0 RS256 verification, audience/issuer checks, whitelist enforcement, ownership checks, and signed event validation
+Added /healthz endpoints to both API applications:
+private_app.py
+public_ingress.py
+Updated kaggle_launcher.py
+Avoids logging notebook metadata
+Avoids exposing Kaggle CLI output in API errors
+Preserves Pull → Adapt → Push, GPU, private notebook, and signing behavior
+Added production startup tests in test_production_packaging.py
+Compose topology
+control-api listens internally on 8010
+event-ingress listens internally on 8011
+No host ports are published
+Stable private network name: aob_control
+Event ingress connects only to external marcheagents-edge
+Both services share the persistent aob-data SQLite volume
+Secrets are mounted read-only:
+Event secret
+allowed_users.json
+Kaggle kaggle.json
+Existing Oracle Caddy remains responsible for public routing
+Validation
+Targeted security, event-contract, production-startup tests: 63 passed
+Full suite: 107 passed, 1 failed
+The failure is the existing Windows fake-llama scaling test:
+WinError 193: %1 is not a valid Win32 application
+This is unrelated to the packaging/configuration changes.
+Dependency lock entries were verified against the project virtual environment.
+Compose configuration was rendered successfully with placeholder environment values.
+ARM64 Docker image build was not executed because the local Docker daemon is unavailable.
+Oracle prerequisites
+Before deployment:
+
+Provide real host-side secret files for the event secret, whitelist, and Kaggle credentials.
+Create/verify marcheagents-edge.
+Attach the MarcheAgents BFF Compose project to external aob_control.
+Configure existing Caddy routes:
+BFF/private traffic → control-api:8010
+Public /api/events → event-ingress:8011
+Build and verify with
+docker compose -f deploy/oci/compose.yaml build --platform linux/arm64
+docker compose -f deploy/oci/compose.yaml up -d

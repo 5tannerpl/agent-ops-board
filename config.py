@@ -60,7 +60,21 @@ ALLOWED_USERS_FILE = Path(os.environ.get("AOB_ALLOWED_USERS_FILE", ROOT / "allow
 DEMO_DB_PATH = Path(os.environ.get("AOB_DEMO_DB_PATH", RUNTIME_DIR / "demo.db"))
 
 # Kaggle -> FastAPI events. Each run gets its own signing key derived from this secret.
+# The environment variable remains useful for local development; production mounts the
+# secret at EVENT_SECRET_FILE instead.
 EVENT_SECRET = os.environ.get("AOB_EVENT_SECRET", "")
+EVENT_SECRET_FILE = Path(os.environ.get("AOB_EVENT_SECRET_FILE", "/run/secrets/aob_event_secret"))
+
+
+def get_event_secret() -> str:
+    """Return the mounted event secret, falling back to the development env var."""
+    try:
+        if EVENT_SECRET_FILE.is_file():
+            return EVENT_SECRET_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        if AOB_ENV == "production":
+            return ""
+    return EVENT_SECRET.strip()
 EVENTS_PUBLIC_URL = os.environ.get("AOB_EVENTS_URL", "")  # e.g. https://demo.example.com/api/events
 EVENT_MAX_BYTES = 64 * 1024
 EVENT_MAX_SKEW_SECONDS = 300

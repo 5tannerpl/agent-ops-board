@@ -1,0 +1,95 @@
+name: aob
+
+services:
+  control-api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
+    image: ${AOB_IMAGE:-agent-ops-board:arm64}
+    command: ["uvicorn", "api.private_app:app", "--host", "0.0.0.0", "--port", "8010"]
+    environment:
+      AOB_ENV: production
+      AOB_AUTH0_DOMAIN: ${AOB_AUTH0_DOMAIN:?set Auth0 domain}
+      AOB_AUTH0_AUDIENCE: ${AOB_AUTH0_AUDIENCE:?set Auth0 audience}
+      AOB_EVENTS_URL: ${AOB_EVENTS_URL:?set public events URL}
+      AOB_EVENT_SECRET_FILE: /run/secrets/aob_event_secret
+      AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users.json
+      AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
+      KAGGLE_CONFIG_DIR: /run/secrets
+      AOB_KAGGLE_BIN: kaggle
+    secrets:
+      - aob_event_secret
+      - source: allowed_users
+        target: allowed_users.json
+      - source: kaggle
+        target: kaggle.json
+    volumes:
+      - aob-data:/var/lib/aob
+    networks:
+      - aob_control
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.0
+
+  event-ingress:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
+    image: ${AOB_IMAGE:-agent-ops-board:arm64}
+    command: ["uvicorn", "api.public_ingress:app", "--host", "0.0.0.0", "--port", "8011"]
+    environment:
+      AOB_ENV: production
+      AOB_AUTH0_DOMAIN: ${AOB_AUTH0_DOMAIN:?set Auth0 domain}
+      AOB_AUTH0_AUDIENCE: ${AOB_AUTH0_AUDIENCE:?set Auth0 audience}
+      AOB_EVENTS_URL: ${AOB_EVENTS_URL:?set public events URL}
+      AOB_EVENT_SECRET_FILE: /run/secrets/aob_event_secret
+      AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users.json
+      AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
+    secrets:
+      - aob_event_secret
+      - source: allowed_users
+        target: allowed_users.json
+    volumes:
+      - aob-data:/var/lib/aob
+    networks:
+      - marcheagents_edge
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+
+volumes:
+  aob-data:
+
+secrets:
+  aob_event_secret:
+    file: ${AOB_EVENT_SECRET_FILE:?set path to event secret}
+    name: aob_event_secret
+  allowed_users:
+    file: ${AOB_ALLOWED_USERS_FILE:?set path to allowed_users.json}
+    name: aob_allowed_users
+  kaggle:
+    file: ${KAGGLE_CREDENTIALS_FILE:?set path to kaggle.json}
+    name: aob_kaggle
+
+networks:
+  aob_control:
+    name: aob_control
+  marcheagents_edge:
+    external: true
+    name: marcheagents-edge

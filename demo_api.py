@@ -159,7 +159,7 @@ def ingest_event(event: EventIn) -> str:
 
 @ingress_router.post("/api/events")
 async def receive_event(request: Request):
-    if not config.EVENT_SECRET:
+    if not config.get_event_secret():
         raise HTTPException(503, "Event ingest is not configured")
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > config.EVENT_MAX_BYTES:

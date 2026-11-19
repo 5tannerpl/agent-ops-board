@@ -110,8 +110,8 @@ def render_prelude(run_id: str, mode: str = "light", units: int | None = None, k
         raise LaunchError("Invalid demo mode")
     if units is not None and (isinstance(units, bool) or not isinstance(units, int) or not 1 <= units <= 500):
         raise LaunchError("Invalid demo unit count")
-    if not config.EVENT_SECRET or not config.EVENTS_PUBLIC_URL:
-        raise LaunchError("AOB_EVENT_SECRET and AOB_EVENTS_URL must be configured")
+    if not config.get_event_secret() or not config.EVENTS_PUBLIC_URL:
+        raise LaunchError("Event signing and AOB_EVENTS_URL must be configured")
     if not config.EVENTS_PUBLIC_URL.startswith("https://"):
         raise LaunchError("AOB_EVENTS_URL must be a public HTTPS endpoint")
     return ("# Staged by Agent Ops Board. PRIVATE notebook only.\n"
@@ -136,10 +136,8 @@ def _run_kaggle(args: list[str], timeout: float) -> subprocess.CompletedProcess:
 def _cli_checked(args: list[str], timeout: float, operation: str) -> subprocess.CompletedProcess:
     proc = _run_kaggle(args, timeout)
     if proc.returncode != 0:
-        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
-        # Avoid forwarding CLI output that could include auth material.
-        detail = lines[-1][:160] if lines else f"exit code {proc.returncode}"
-        raise LaunchError(f"Kaggle {operation} failed: {detail}")
+        # Kaggle CLI output can contain credential or request metadata.
+        raise LaunchError(f"Kaggle {operation} failed (exit code {proc.returncode})")
     return proc
 
 
@@ -395,7 +393,7 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
 
 
 def submit(run_id: str, mode: str = "light", units: int | None = None, key_version: int = 1) -> None:
-    """Submit a Kaggle batch and log final metadata before Push."""
+    """Submit a Kaggle batch without logging notebook metadata."""
 
     with tempfile.TemporaryDirectory(prefix="aob-kaggle-") as tmp:
         target = Path(tmp)
@@ -403,25 +401,8 @@ def submit(run_id: str, mode: str = "light", units: int | None = None, key_versi
         # 1. Pull → Adapt → Remove docker_image → Stage
         stage_notebook(run_id, target, mode, units, key_version)
 
-        # 2. Read the actual metadata prepared for Push
-        metadata_file = target / "kernel-metadata.json"
-
-        meta = json.loads(
-            metadata_file.read_text(encoding="utf-8-sig")
-        )
-
-        # 3. Print final metadata to FastAPI console
-        log.warning(
-            "\n========== KAGGLE FINAL METADATA (BEFORE PUSH) ==========\n"
-            "%s\n"
-            "docker_image exists: %s\n"
-            "=========================================================",
-            json.dumps(meta, ensure_ascii=False, indent=2),
-            "docker_image" in meta
-        )
-
-        # 4. Push ONCE
-        log.warning("Starting Kaggle Push: %s", kernel_ref())
+        # Push once; do not expose staged notebook metadata in application logs.
+        log.info("Starting Kaggle push for verified notebook")
 
         _cli_checked(
             [
@@ -436,12 +417,7 @@ def submit(run_id: str, mode: str = "light", units: int | None = None, key_versi
             "push"
         )
 
-        # 5. Push accepted
-        log.warning(
-            "Kaggle Push accepted: %s (run_id=%s)",
-            kernel_ref(),
-            run_id
-        )
+        log.info("Kaggle push accepted")
 
 
 

@@ -69,7 +69,7 @@ def require_demo_access(user: dict = Depends(require_user)) -> dict:
 
 def run_event_key(run_id: str, version: int = 1) -> str:
     """Per-run key: the notebook only ever holds a key that is valid for its own run_id."""
-    return hmac.new(config.EVENT_SECRET.encode(), f"run:{run_id}:v:{version}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(config.get_event_secret().encode(), f"run:{run_id}:v:{version}".encode(), hashlib.sha256).hexdigest()
 
 
 def sign_event(run_id: str, timestamp: str, body: bytes, version: int = 1) -> str:
@@ -78,7 +78,7 @@ def sign_event(run_id: str, timestamp: str, body: bytes, version: int = 1) -> st
 
 
 def verify_event(run_id: str, timestamp: str | None, signature: str | None, body: bytes, version: int = 1) -> bool:
-    if not config.EVENT_SECRET or not timestamp or not signature or not SIGNATURE_RE.match(signature):
+    if not config.get_event_secret() or not timestamp or not signature or not SIGNATURE_RE.match(signature):
         return False
     try:
         if abs(time.time() - int(timestamp)) > config.EVENT_MAX_SKEW_SECONDS:
