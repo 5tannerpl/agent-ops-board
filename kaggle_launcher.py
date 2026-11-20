@@ -56,9 +56,14 @@ def aob_emit(event_type, payload=None):
                 response.read()
             return True
         except Exception as exc:
-            # Do not print request headers / secrets; preserve validated GPU execution.
-            print("[AOB EVENT] delivery failed for", event_type,
-                  "attempt", attempt + 1, "error type", type(exc).__name__, flush=True)
+            print(
+                "[AOB EVENT] delivery failed for",
+                event_type,
+                "attempt", attempt + 1,
+                "error type", type(exc).__name__,
+                "http_status", getattr(exc, "code", None),
+                flush=True
+            )
             if attempt < 2:
                 time.sleep(2 ** attempt)
     return False
