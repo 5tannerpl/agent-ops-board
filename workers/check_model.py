@@ -7,7 +7,7 @@ import time
 import config
 from adapters import synthetic
 from intake import schema
-from workers import model_client
+from workers import model_client, otel
 
 
 def main() -> int:
@@ -35,7 +35,8 @@ def main() -> int:
         dt = time.perf_counter() - t0
         times.append(dt)
         try:
-            result = schema.validate_output(out, segments)
+            with otel.span("aob.result.validation"):
+                result = schema.validate_output(out, segments)
             verdict = f"valid, {len(result['intents'])} intent(s), warnings={result['validation']['warnings']}"
         except schema.InvalidOutput as exc:
             verdict, bad = f"INVALID output ({exc})", bad + 1
@@ -48,4 +49,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    otel.configure_otel()
+    try:
+        with otel.span("aob.run"):
+            exit_code = main()
+    finally:
+        otel.shutdown_otel()
+    sys.exit(exit_code)

@@ -191,6 +191,34 @@ def test_prelude_rejects_bad_mode_and_units(demo):
             kaggle_launcher.render_prelude("run-0123456789abcdef", **kwargs)
 
 
+def test_traced_staging_pins_both_checkouts_and_rolls_back(demo, tmp_path, monkeypatch):
+    from tests.test_event_contract import NOTEBOOKS
+    import os
+
+    cells = json.loads(NOTEBOOKS[1].read_text())["cells"]
+    run_id = "run-0123456789abcdef"
+    monkeypatch.setattr(kaggle_launcher, "_cli_checked", fake_pull(cells))
+    monkeypatch.setenv("AOB_OTEL_ENABLED", "true")
+    monkeypatch.setenv("AOB_OTEL_COMMIT", "main")
+    with pytest.raises(kaggle_launcher.LaunchError, match="full Git commit"):
+        kaggle_launcher.stage_notebook(run_id, tmp_path)
+    monkeypatch.setenv("AOB_OTEL_COMMIT", "a" * 40)
+    kaggle_launcher.stage_notebook(run_id, tmp_path)
+    staged = json.loads((tmp_path / "nb.ipynb").read_text())["cells"]
+    sources = ["".join(c["source"]) for c in staged]
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    ns = {}
+    exec(sources[0], ns)
+    assert os.environ["AOB_RUN_ID"] == ns["AOB_RUN_ID"] == run_id
+    assert os.environ["AOB_OTEL_ENABLED"] == "true"
+    assert sum(s.startswith(kaggle_launcher._CHECKOUT_GUARD) for s in sources) == 1
+    assert "_aob_repo = REPO_DIR" in sources[-1] and "git" not in sources[-1]
+    monkeypatch.setattr(kaggle_launcher, "_cli_checked", fake_pull(staged))
+    monkeypatch.setenv("AOB_OTEL_ENABLED", "false")
+    kaggle_launcher.stage_notebook(run_id, tmp_path)
+    assert "aob_trace_checkout" not in (tmp_path / "nb.ipynb").read_text()
+
+
 def test_events_can_be_filtered_by_type_with_a_stable_cursor(demo):
     run_id = start(demo)
     emit(demo, run_id, 1, "notebook_started")

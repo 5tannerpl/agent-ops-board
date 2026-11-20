@@ -241,6 +241,35 @@ def test_failed_gpu1_start_is_reported_and_never_marked_ready(tmp_path):
 
 # ---- end to end: real processes, fake llama-server ----------------------------------------------
 
+def test_light_demo_exports_correlated_worker_traces(tmp_path, monkeypatch):
+    pytest.importorskip("opentelemetry.sdk.trace")
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    for name in ("RUNTIME_DIR", "RAW_DIR", "ATTACHMENT_DIR", "RESULTS_DIR", "DB_PATH", "MODEL_BACKEND", "MODEL_URL",
+                 "MODEL_NAME", "MODEL_TIMEOUT"):
+        monkeypatch.setattr(config, name, getattr(config, name))
+    run_id = "run-0123456789abcdef"
+    monkeypatch.setenv("AOB_OTEL_ENABLED", "true")
+    monkeypatch.setenv("AOB_RUN_ID", run_id)
+    env = Environment(repo_dir=config.ROOT, runtime_dir=tmp_path, llama_server=fake_llama_binary(tmp_path),
+                      model_path=tmp_path / "fake.gguf", gpu0_port=free_port(), gpu1_port=free_port(),
+                      router_port=free_port(), require_gpu=False, stats_fn=lambda: {})
+    events = []
+    summary = run_scenario(tuned(LIGHT, units=2, arrival_window_seconds=0, poll_seconds=.25), env,
+                           lambda kind, data: events.append((kind, data)) or True)
+    assert summary["status"] == "passed", summary
+    assert_contract(events)
+    spans = [json.loads(line) for line in (tmp_path / "logs/supervisor.log").read_text().splitlines()
+             if line.startswith('{"name":')]
+    tasks = [s for s in spans if s["name"] == "aob.worker.task"]
+    assert len(tasks) == 2
+    for task in tasks:
+        trace = [s for s in spans if s["context"]["trace_id"] == task["context"]["trace_id"]]
+        assert all(s["attributes"]["aob.run_id"] == run_id for s in trace)
+        assert any(s["name"] == "aob.run" and s["context"]["span_id"] == task["parent_id"] for s in trace)
+        children = {s["name"] for s in trace if s["parent_id"] == task["context"]["span_id"]}
+        assert children == {f"chat {env.model_alias}", "aob.result.validation"}
+
+
 def test_dual_gpu_scaling_end_to_end_with_fake_llama(tmp_path, monkeypatch):
     for name in ("RUNTIME_DIR", "RAW_DIR", "ATTACHMENT_DIR", "RESULTS_DIR", "DB_PATH", "MODEL_BACKEND", "MODEL_URL",
                  "MODEL_NAME", "MODEL_TIMEOUT"):

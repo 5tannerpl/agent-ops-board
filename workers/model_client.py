@@ -7,6 +7,7 @@ from typing import Protocol
 import httpx
 
 import config
+from workers import otel
 from contextvars import ContextVar
 from contextlib import contextmanager
 
@@ -105,11 +106,16 @@ class LlamaCppClient(_HttpClient):
     backend = "llamacpp"
 
     def generate(self, system: str, user: str, timeout: float) -> str:
-        data = self._post("/v1/chat/completions", {
-            "model": self.model, "temperature": 0, "max_tokens": 600,
-            "response_format": {"type": "json_object"},
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}, timeout)
-        return data["choices"][0]["message"]["content"]
+        with otel.span(f"chat {self.model}", {"gen_ai.operation.name": "chat",
+                                              "gen_ai.request.model": self.model}) as current:
+            data = self._post("/v1/chat/completions", {
+                "model": self.model, "temperature": 0, "max_tokens": 600,
+                "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}, timeout)
+            content = data["choices"][0]["message"]["content"]
+            if current is not None:
+                otel.record_usage(current, data.get("usage"))
+            return content
 
     def server_version(self) -> str | None:
         try:

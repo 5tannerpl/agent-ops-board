@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 import logging
 
@@ -30,6 +31,7 @@ _RUN_RE = re.compile(r"^run-[0-9a-f]{16}$")
 _REPO_URL_RE = re.compile(r"^https://[A-Za-z0-9._~/-]+(\.git)?$")
 DEMO_MODES = ("light", "high_concurrency")
 SCALING_CELL_MARKER = "# AOB scaling demo bootstrap"
+_CHECKOUT_GUARD = 'if "aob_trace_checkout" in globals():\n    aob_trace_checkout(REPO_DIR, REPO_URL)\nelse:\n'
 log = logging.getLogger("kaggle_launcher")
 # Matches the raw-body HMAC contract in demo_auth.verify_event().
 PRELUDE_BODY = '''import hashlib, hmac, json, time, urllib.request, uuid
@@ -64,7 +66,7 @@ def aob_emit(event_type, payload=None):
 
 
 
-def render_scaling_cell() -> str:
+def render_scaling_cell(traced: bool = False) -> str:
     """Launch autoscaling demo from kaggle_scaling branch."""
 
     repo_url = os.getenv(
@@ -77,13 +79,16 @@ def render_scaling_cell() -> str:
     if not _REPO_URL_RE.fullmatch(repo_url):
         raise LaunchError("Invalid AOB_REPO_URL")
 
-    return (
-        f"{SCALING_CELL_MARKER}\n"
-        "import subprocess, sys\n"
+    checkout = "_aob_repo = REPO_DIR\n" if traced else (
         "from pathlib import Path\n"
         "_aob_repo = Path('/kaggle/working/aob-scaling-repo')\n"
         "if not (_aob_repo / 'scaling' / 'bootstrap.py').is_file():\n"
         f"    subprocess.run(['git', 'clone', '--depth', '1', '--branch', {repo_branch!r}, {repo_url!r}, str(_aob_repo)], check=True)\n"
+    )
+    return (
+        f"{SCALING_CELL_MARKER}\n"
+        "import subprocess, sys\n"
+        f"{checkout}"
         "sys.path.insert(0, str(_aob_repo))\n"
         "from scaling import bootstrap\n"
         "AOB_SCALING_SUMMARY = bootstrap.run(globals())\n"
@@ -103,6 +108,36 @@ def kernel_ref() -> str:
     return ref
 
 
+def _trace_prelude() -> str:
+    if os.getenv("AOB_OTEL_ENABLED", "").lower() != "true":
+        return ""
+    commit = os.getenv("AOB_OTEL_COMMIT", "")
+    if not re.fullmatch(r"[a-f0-9]{40}", commit):
+        raise LaunchError("Traced notebooks require AOB_OTEL_COMMIT (full Git commit SHA)")
+    labels = {"AOB_OTEL_SERVICE_NAME": os.getenv("AOB_OTEL_SERVICE_NAME", "aob-kaggle-agent"),
+              "AOB_OTEL_ENVIRONMENT": os.getenv("AOB_OTEL_ENVIRONMENT", "kaggle-demo")}
+    if not all(re.fullmatch(r"[\w.-]{1,64}", value, re.ASCII) for value in labels.values()):
+        raise LaunchError("Invalid AOB tracing resource label")
+    if os.getenv("AOB_OTEL_EXPORTER", "console") != "console":
+        raise LaunchError("Only console tracing is supported")
+    return f'''
+import os
+os.environ.update({labels!r}, AOB_OTEL_ENABLED="true", AOB_OTEL_EXPORTER="console",
+                  AOB_RUN_ID=AOB_RUN_ID, AOB_OTEL_COMMIT={commit!r})
+
+def aob_trace_checkout(directory, url):
+    import subprocess, sys
+    subprocess.run(["git", "init", "-q", str(directory)], check=True)
+    git = ["git", "-C", str(directory)]
+    subprocess.run(git + ["fetch", "--depth=1", url, {commit!r}], check=True)
+    subprocess.run(git + ["checkout", "--detach", {commit!r}], check=True)
+    if subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r",
+                       str(directory / "kaggle-notebook" / "requirements-otel.txt")]).returncode:
+        print("AOB tracing disabled: optional dependency installation failed", flush=True)
+        os.environ["AOB_OTEL_ENABLED"] = "false"
+'''
+
+
 def render_prelude(run_id: str, mode: str = "light", units: int | None = None, key_version: int = 1) -> str:
     if not _RUN_RE.fullmatch(run_id):
         raise LaunchError("Invalid run ID")
@@ -120,7 +155,7 @@ def render_prelude(run_id: str, mode: str = "light", units: int | None = None, k
             f"AOB_DEMO_UNITS = {units if mode == 'high_concurrency' else None!r}\n"
             f"AOB_EVENTS_URL = {config.EVENTS_PUBLIC_URL!r}\n"
             f"_AOB_KEY = {demo_auth.run_event_key(run_id, key_version)!r}\n"
-            + PRELUDE_BODY)
+            + PRELUDE_BODY + _trace_prelude())
 
 
 def _run_kaggle(args: list[str], timeout: float) -> subprocess.CompletedProcess:
@@ -327,10 +362,24 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
             "Expected exactly one legacy Step 6 send_event function with four validation events; "
             "no changes submitted. Inspect the original Kaggle Notebook.")
 
+    traced = os.getenv("AOB_OTEL_ENABLED", "").lower() == "true"
+    checkouts = 0
+    for cell in notebook["cells"]:
+        source = _source(cell)
+        if source.startswith(_CHECKOUT_GUARD):
+            source = textwrap.dedent(source[len(_CHECKOUT_GUARD):])
+            cell["source"] = source.splitlines(keepends=True)
+        if (traced and cell["cell_type"] == "code" and source.startswith('if (REPO_DIR / ".git").is_dir():')
+                and '"pull", "--ff-only"' in source and '"git", "clone"' in source):
+            cell["source"] = (_CHECKOUT_GUARD + textwrap.indent(source, "    ")).splitlines(keepends=True)
+            checkouts += 1
+    if traced and checkouts != 1:
+        raise LaunchError("Cannot identify the verified notebook Git checkout for a pinned tracing run")
+
     # Report when the notebook actually starts; no claims of readiness before /health.
     notebook["cells"].insert(0, _code_cell(render_prelude(run_id, mode, units, key_version)))
     notebook["cells"].insert(1, _code_cell('aob_emit("notebook_started", {"status": "running"})\n'))
-    notebook["cells"].append(_code_cell(render_scaling_cell()))
+    notebook["cells"].append(_code_cell(render_scaling_cell(traced)))
     for cell in notebook["cells"]:
         if cell.get("cell_type") == "code":
             cell["execution_count"] = None

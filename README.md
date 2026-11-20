@@ -190,6 +190,54 @@ Not covered: this is telemetry of a batch, not a customer-facing inference servi
 model process, not fewer Kaggle GPUs. Nothing here has been executed on real Kaggle T4s; run High Concurrency with
 50/100/150 tasks once and check the evidence table before presenting results.
 
+### Optional Kaggle console traces (Phase 3.0A)
+
+Tracing is **off by default**. To enable it, first publish a reviewed commit containing
+the instrumentation and scaling code to the repository used by the private notebook.
+Set these variables on the **notebook launcher process** before starting a new Live Demo:
+
+```dotenv
+AOB_OTEL_ENABLED=true
+AOB_OTEL_COMMIT=<full 40-character lowercase Git SHA>
+AOB_OTEL_EXPORTER=console
+AOB_OTEL_SERVICE_NAME=aob-kaggle-agent
+AOB_OTEL_ENVIRONMENT=kaggle-demo
+```
+
+For traced runs the staged Git checkout fetches that commit instead of pulling a branch.
+Step 6 and the scaling bootstrap use the same checkout. The notebook installs the
+[optional SDK pins](kaggle-notebook/requirements-otel.txt); no SDK is required on the launcher.
+Use non-sensitive service/environment labels. No OTLP endpoint is supported.
+
+1. Run **Light** first. Step 6 starts `python -m workers.check_model` and the separate
+   `modelcheck.py` probe. Look in the first subprocess's printed output for
+   `AOB tracing enabled (console)` and JSON spans. The standalone OpenAI probe is unchanged.
+2. Inspect `/kaggle/working/aob-runtime/logs/supervisor.log` for the actual queue workers'
+   spans. Match `attributes["aob.run_id"]` to the Run ID in the dashboard, **not** to the
+   internal SQLite load-test ID. Each worker has its own `aob.run` trace; a task's model
+   and validation spans have that task's span ID as their parent.
+3. Repeat with **High Concurrency**. Compare signed event delivery, worker counts, GPU
+   routing and scaling verdicts with tracing off. The dashboard still displays events,
+   not traces. Export is best effort; a killed worker may lose its final batch of spans.
+4. **Rollback:** set `AOB_OTEL_ENABLED=false` on the launcher and start a fresh batch.
+   No event, dashboard or collector changes are needed.
+
+Local regression: 75 targeted tests passed with the optional SDK installed (signed event
+contract, staging/rollback, worker lifecycle, both scaling modes, and tracing failures).
+For example, the light-mode test produced this worker span (selected fields; real worker
+process, synthetic workload and stand-in llama server, **not** a Kaggle GPU measurement):
+
+```json
+{"name":"aob.worker.task","context":{"trace_id":"0xdc9e467c65bd917fddc6b20e01f1e3d5","span_id":"0xf5c9f3ceca80c43d"},"parent_id":"0xd9df8cd80e17b5b9","attributes":{"aob.run_id":"run-0123456789abcdef","aob.worker_id":"worker-01","aob.task_id":1}}
+```
+
+To reproduce the regression in a project test environment:
+
+```bash
+python -m pip install -r kaggle-notebook/requirements-otel.txt
+python -m pytest -q tests/test_worker_otel.py tests/test_event_contract.py tests/test_demo_scaling.py tests/test_scaling.py tests/test_queue_and_worker.py
+```
+
 ## Not production
 
 No RBAC beyond the live-demo whitelist, no encryption or retention; the `/v1/*` API is unauthenticated (keep it

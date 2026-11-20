@@ -148,7 +148,8 @@ def run_scenario(settings: ScalingSettings, env: Environment, emit) -> dict:
         sup_log = open(logs / "supervisor.log", "w")
         supervisor = subprocess.Popen(
             [sys.executable, "-m", "workers.supervisor", "--workers", str(settings.min_workers)],
-            cwd=str(env.repo_dir), env={**os.environ, "PYTHONPATH": str(env.repo_dir)}, stdout=sup_log,
+            cwd=str(env.repo_dir), env={**os.environ, "PYTHONPATH": str(env.repo_dir),
+                                        "AOB_SCALING_MODE": settings.mode, "AOB_UNITS": str(settings.units)}, stdout=sup_log,
             stderr=subprocess.STDOUT)
         if not _wait(lambda: reader.actual_workers() >= settings.min_workers, 90):
             raise ScenarioError("WORKERS_NOT_STARTED", f"only {reader.actual_workers()} worker(s) became healthy")

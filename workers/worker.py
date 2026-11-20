@@ -11,7 +11,7 @@ from intake import schema
 from intake.service import load_segments
 from orchestration import handoff
 from storage import db, files
-from workers import model_client
+from workers import model_client, otel
 from workers.queue import (Job, LeaseLost, assert_lease, claim_job, complete_job, fail_or_retry,
                            log_event, save_checkpoint, send_to_review)
 
@@ -93,7 +93,9 @@ class Worker:
                 self.lease_lost.clear()                
                 try:
                     with model_client.unit_context(job.unit_id):
-                        self._process(job)
+                        with otel.span("aob.worker.task", {"aob.worker_id": self.worker_id,
+                                                           "aob.task_id": job.job_id}):
+                            self._process(job)
                 except LeaseLost:
                     log_event(self.conn, self.worker_id, job.unit_id, None, "LEASE_LOST", job.attempt,
                               error_code="LEASE_LOST", message="lease reassigned; discarding work")
@@ -207,7 +209,8 @@ class Worker:
                     self._step(job, "LLM_INFERENCE", skip="model output restored from checkpoint")
                 else:
                     self._step(job, "LLM_INFERENCE", lambda: self._infer(job, ctx, fault))
-                self._step(job, "VALIDATE_OUTPUT", lambda: self._validate(job, ctx, channel))
+                with otel.span("aob.result.validation"):
+                    self._step(job, "VALIDATE_OUTPUT", lambda: self._validate(job, ctx, channel))
                 self._step(job, "SAVE_RESULT", lambda: self._save(job, ctx, channel))
             self._step(job, "HANDOFF", lambda: self._handoff(job, fault))
             complete_job(conn, job)
@@ -320,7 +323,12 @@ def main(worker_id: str) -> None:
     worker = Worker(worker_id)
     signal.signal(signal.SIGTERM, lambda *_: worker.stop_event.set())
     signal.signal(signal.SIGINT, lambda *_: worker.stop_event.set())
-    outcome = worker.run()
+    otel.configure_otel()
+    try:
+        with otel.span("aob.run", {"aob.worker_id": worker_id}):
+            outcome = worker.run()
+    finally:
+        otel.shutdown_otel()
     if outcome == "crashed":
         os._exit(70)
 
