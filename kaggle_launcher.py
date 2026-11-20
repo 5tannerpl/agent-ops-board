@@ -74,7 +74,8 @@ def render_scaling_cell(traced: bool = False) -> str:
         "https://github.com/5tannerpl/agent-ops-board.git"
     )
 
-    repo_branch = "kaggle_scaling"
+    #repo_branch = "kaggle_scaling"
+    repo_branch = "OPENTELE"
 
     if not _REPO_URL_RE.fullmatch(repo_url):
         raise LaunchError("Invalid AOB_REPO_URL")
