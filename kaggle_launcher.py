@@ -91,6 +91,7 @@ def render_scaling_cell(traced: bool = False) -> str:
         "if not (_aob_repo / 'scaling' / 'bootstrap.py').is_file():\n"
         f"    subprocess.run(['git', 'clone', '--depth', '1', '--branch', {repo_branch!r}, {repo_url!r}, str(_aob_repo)], check=True)\n"
     )
+    repo_commit = _trace_commit() if traced else None
     otel_setup = (
         "import os\n"
         "os.environ['AOB_OTEL_ENABLED'] = 'true'\n"
@@ -98,7 +99,7 @@ def render_scaling_cell(traced: bool = False) -> str:
         "os.environ['AOB_OTEL_SERVICE_NAME'] = 'aob-kaggle-worker'\n"
         "os.environ['AOB_OTEL_ENVIRONMENT'] = 'kaggle-demo'\n"
         f"os.environ['AOB_OTEL_COMMIT'] = {repo_commit!r}\n"
-        "os.environ['AOB_RUN_ID'] = RUN_ID\n"
+        "os.environ['AOB_RUN_ID'] = AOB_RUN_ID\n"
         "print('OTel enabled:', os.environ.get('AOB_OTEL_ENABLED'))\n"
         "print('Run ID:', os.environ.get('AOB_RUN_ID'))\n"
     ) if traced else ""
@@ -115,61 +116,65 @@ def render_scaling_cell(traced: bool = False) -> str:
 
 TRACE_CHECK_CELL_MARKER = "# AOB_WORKER_TRACE_VERIFICATION"
 
+
+def _trace_commit() -> str:
+    commit = os.getenv("AOB_OTEL_COMMIT", "")
+    if not re.fullmatch(r"[a-f0-9]{40}", commit):
+        raise LaunchError("Traced notebooks require AOB_OTEL_COMMIT (full Git commit SHA)")
+    return commit
+
+
 def build_trace_check_cell() -> str:
-    return '''
-        # AOB_WORKER_TRACE_VERIFICATION
-        from pathlib import Path
+    return textwrap.dedent(
+        f"""
+        {TRACE_CHECK_CELL_MARKER}
         import json
         from collections import Counter
+        from pathlib import Path
 
-        log = Path("/kaggle/working/aob-runtime/logs/supervisor.log")
-
-        if not log.exists():
-            print("TRACE CHECK: supervisor.log not found")
+        trace_log = Path("/kaggle/working/aob-runtime/logs/supervisor.log")
+        spans = []
+        if trace_log.is_file():
+            try:
+                for trace_line in trace_log.read_text(errors="replace").splitlines():
+                    try:
+                        span = json.loads(trace_line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(span, dict) and isinstance(span.get("name"), str):
+                        spans.append(span)
+            except OSError as exc:
+                print("TRACE CHECK: could not read supervisor.log:", type(exc).__name__)
         else:
-            spans = []
+            print("TRACE CHECK: supervisor.log not found")
 
-            for line in log.read_text(errors="replace").splitlines():
-                try:
-                    obj = json.loads(line)
-                    if "context" in obj and "name" in obj:
-                        spans.append(obj)
-                except json.JSONDecodeError:
-                    pass
+        span_counts = Counter(span["name"] for span in spans)
+        task_spans = [span for span in spans if span["name"] == "aob.worker.task"]
+        unit_ids = {{
+            span.get("attributes", {{}}).get("aob.unit_id")
+            for span in task_spans
+            if isinstance(span.get("attributes"), dict)
+        }}
+        unit_ids.discard(None)
 
-            counts = Counter(s["name"] for s in spans)
-
-            task_spans = [
-                s for s in spans
-                if s["name"] == "aob.worker.task"
-            ]
-
-            print("=== AOB WORKER TRACE VERIFICATION ===")
-            print("Total Spans:", len(spans))
-            print("Worker Task:", len(task_spans))
-            print("LLM Inference:", sum(
-                count for name, count in counts.items()
-                if name.startswith("chat ")
-            ))
-            print("Validation:", counts["aob.result.validation"])
-
-            unit_ids = {
-                s.get("attributes", {}).get("aob.unit_id")
-                for s in task_spans
-            }
-            unit_ids.discard(None)
-
-            print("Unique Unit IDs:", len(unit_ids))
-
-            for s in task_spans[:5]:
-                a = s.get("attributes", {})
-                print(
-                    "Worker:", a.get("aob.worker_id"),
-                    "Unit:", a.get("aob.unit_id"),
-                    "Attempt:", a.get("aob.attempt"),
-                    "Run:", a.get("aob.run_id")
-                )
-        '''
+        print("=== AOB WORKER TRACE VERIFICATION ===")
+        print("Total Spans:", len(spans))
+        print("Worker Task Spans:", len(task_spans))
+        print("LLM Inference Spans:", sum(
+            count for name, count in span_counts.items() if name.startswith("chat ")
+        ))
+        print("Validation Spans:", span_counts["aob.result.validation"])
+        print("Unique Unit IDs:", len(unit_ids))
+        for span in task_spans[:5]:
+            attributes = span.get("attributes", {{}})
+            print(
+                "Worker:", attributes.get("aob.worker_id"),
+                "Unit:", attributes.get("aob.unit_id"),
+                "Attempt:", attributes.get("aob.attempt"),
+                "Run:", attributes.get("aob.run_id"),
+            )
+        """
+    ).lstrip()
 
 
 
@@ -188,9 +193,7 @@ def kernel_ref() -> str:
 def _trace_prelude() -> str:
     if os.getenv("AOB_OTEL_ENABLED", "").lower() != "true":
         return ""
-    commit = os.getenv("AOB_OTEL_COMMIT", "")
-    if not re.fullmatch(r"[a-f0-9]{40}", commit):
-        raise LaunchError("Traced notebooks require AOB_OTEL_COMMIT (full Git commit SHA)")
+    commit = _trace_commit()
     labels = {"AOB_OTEL_SERVICE_NAME": os.getenv("AOB_OTEL_SERVICE_NAME", "aob-kaggle-agent"),
               "AOB_OTEL_ENVIRONMENT": os.getenv("AOB_OTEL_ENVIRONMENT", "kaggle-demo")}
     if not all(re.fullmatch(r"[\w.-]{1,64}", value, re.ASCII) for value in labels.values()):
@@ -407,7 +410,10 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
                 'aob_emit("notebook_started", {"status": "running"})':
             notebook["cells"].pop(0)
     # A previously staged scaling cell is replaced, never duplicated.
-    notebook["cells"] = [c for c in notebook["cells"] if not _source(c).startswith(SCALING_CELL_MARKER)]
+    notebook["cells"] = [
+        c for c in notebook["cells"]
+        if not _source(c).startswith((SCALING_CELL_MARKER, TRACE_CHECK_CELL_MARKER))
+    ]
     if any("AOB_RUN_ID = " in _source(c) for c in notebook["cells"]):
         raise LaunchError("Notebook still contains another run credential cell")
 
@@ -457,9 +463,7 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
     notebook["cells"].insert(0, _code_cell(render_prelude(run_id, mode, units, key_version)))
     notebook["cells"].insert(1, _code_cell('aob_emit("notebook_started", {"status": "running"})\n'))
     notebook["cells"].append(_code_cell(render_scaling_cell(traced)))
-    notebook["cells"].append(
-        nbformat.v4.new_code_cell(build_trace_check_cell())
-    )
+    notebook["cells"].append(_code_cell(build_trace_check_cell()))
     for cell in notebook["cells"]:
         if cell.get("cell_type") == "code":
             cell["execution_count"] = None

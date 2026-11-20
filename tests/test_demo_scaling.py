@@ -172,9 +172,17 @@ def test_staged_notebook_gets_mode_prelude_and_exactly_one_scaling_cell(demo, tm
     staged = json.loads((out / "nb.ipynb").read_text())
     sources = ["".join(c["source"]) for c in staged["cells"]]
     assert "AOB_DEMO_MODE = 'high_concurrency'" in sources[0] and "AOB_DEMO_UNITS = 150" in sources[0]
-    assert sources[-1].startswith(kaggle_launcher.SCALING_CELL_MARKER)
-    compile(sources[0] + "\n" + sources[-1], "staged", "exec")
-    assert "bootstrap.run(globals())" in sources[-1] and "test-secret" not in sources[-1]
+    scaling_index = next(i for i, source in enumerate(sources)
+                         if source.startswith(kaggle_launcher.SCALING_CELL_MARKER))
+    trace_index = next(i for i, source in enumerate(sources)
+                       if source.startswith(kaggle_launcher.TRACE_CHECK_CELL_MARKER))
+    validation_index = next(i for i, source in enumerate(sources)
+                            if "model_validation_started" in source)
+    assert validation_index < scaling_index < trace_index
+    compile(sources[0] + "\n" + sources[scaling_index] + "\n" + sources[trace_index],
+            "staged", "exec")
+    assert "bootstrap.run(globals())" in sources[scaling_index]
+    assert "test-secret" not in sources[scaling_index]
 
     # Re-staging a previously staged notebook replaces the prelude and the scaling cell.
     monkeypatch.setattr(kaggle_launcher, "_cli_checked", fake_pull(staged["cells"]))
@@ -182,6 +190,7 @@ def test_staged_notebook_gets_mode_prelude_and_exactly_one_scaling_cell(demo, tm
     kaggle_launcher.stage_notebook("run-fedcba9876543210", again, "light")
     restaged = ["".join(c["source"]) for c in json.loads((again / "nb.ipynb").read_text())["cells"]]
     assert sum(s.startswith(kaggle_launcher.SCALING_CELL_MARKER) for s in restaged) == 1
+    assert sum(s.startswith(kaggle_launcher.TRACE_CHECK_CELL_MARKER) for s in restaged) == 1
     assert "run-0123456789abcdef" not in "".join(restaged) and "AOB_DEMO_UNITS = None" in restaged[0]
 
 
@@ -212,7 +221,19 @@ def test_traced_staging_pins_both_checkouts_and_rolls_back(demo, tmp_path, monke
     assert os.environ["AOB_RUN_ID"] == ns["AOB_RUN_ID"] == run_id
     assert os.environ["AOB_OTEL_ENABLED"] == "true"
     assert sum(s.startswith(kaggle_launcher._CHECKOUT_GUARD) for s in sources) == 1
-    assert "_aob_repo = REPO_DIR" in sources[-1] and "git" not in sources[-1]
+    scaling_index = next(i for i, source in enumerate(sources)
+                         if source.startswith(kaggle_launcher.SCALING_CELL_MARKER))
+    trace_index = next(i for i, source in enumerate(sources)
+                       if source.startswith(kaggle_launcher.TRACE_CHECK_CELL_MARKER))
+    assert trace_index == scaling_index + 1
+    assert "_aob_repo = REPO_DIR" in sources[scaling_index] and "git" not in sources[scaling_index]
+    assert "AOB_OTEL_ENABLED'] = 'true'" in sources[scaling_index]
+    assert "AOB_OTEL_EXPORTER'] = 'console'" in sources[scaling_index]
+    assert "AOB_OTEL_SERVICE_NAME'] = 'aob-kaggle-worker'" in sources[scaling_index]
+    assert "AOB_OTEL_ENVIRONMENT'] = 'kaggle-demo'" in sources[scaling_index]
+    assert "AOB_OTEL_COMMIT'] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'" in sources[scaling_index]
+    assert "AOB_RUN_ID'] = AOB_RUN_ID" in sources[scaling_index]
+    assert "bootstrap.run(globals())" in sources[scaling_index]
     monkeypatch.setattr(kaggle_launcher, "_cli_checked", fake_pull(staged))
     monkeypatch.setenv("AOB_OTEL_ENABLED", "false")
     kaggle_launcher.stage_notebook(run_id, tmp_path)
