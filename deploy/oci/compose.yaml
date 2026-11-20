@@ -8,7 +8,8 @@ services:
       platforms:
         - linux/arm64
     image: ${AOB_IMAGE:-agent-ops-board:arm64}
-    command: ["uvicorn", "api.private_app:app", "--host", "0.0.0.0", "--port", "8010"]
+    command:
+      ["uvicorn", "api.private_app:app", "--host", "0.0.0.0", "--port", "8010"]
     environment:
       AOB_ENV: production
       AOB_AUTH0_DOMAIN: ${AOB_AUTH0_DOMAIN:?set Auth0 domain}
@@ -29,8 +30,15 @@ services:
       - aob-data:/var/lib/aob
     networks:
       - aob_control
+      - aob_egress
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3)"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3)",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -46,7 +54,15 @@ services:
       platforms:
         - linux/arm64
     image: ${AOB_IMAGE:-agent-ops-board:arm64}
-    command: ["uvicorn", "api.public_ingress:app", "--host", "0.0.0.0", "--port", "8011"]
+    command:
+      [
+        "uvicorn",
+        "api.public_ingress:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8011",
+      ]
     environment:
       AOB_ENV: production
       AOB_AUTH0_DOMAIN: ${AOB_AUTH0_DOMAIN:?set Auth0 domain}
@@ -64,7 +80,13 @@ services:
     networks:
       - marcheagents_edge
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/healthz', timeout=3)"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/healthz', timeout=3)",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -90,6 +112,11 @@ secrets:
 networks:
   aob_control:
     name: aob_control
+    internal: true
+
+  aob_egress:
+    name: aob_egress
+
   marcheagents_edge:
     external: true
     name: marcheagents-edge
