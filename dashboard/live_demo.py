@@ -2,6 +2,7 @@
 Worker / GPU autoscaling view. Everything shown comes from events the Kaggle batch reported."""
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 import api_client
 import ui
@@ -182,6 +183,103 @@ def _summary(state: dict) -> None:
     st.dataframe(pd.DataFrame(rows, columns=["Measure", "Value"]), hide_index=True, width="stretch")
 
 
+def _llm_observability(token: str, run_id: str, run_start: float | None = None) -> None:
+    """Render only persisted trace data; no workflow timing is inferred in the UI."""
+    try:
+        overview = api_client.demo_trace_summary(token, run_id)
+        calls = api_client.demo_llm_calls(token, run_id, limit=250,
+                                          sort=st.session_state.get("trace_sort", "start"),
+                                          unit_id=st.session_state.get("trace_unit_filter") or None,
+                                          worker_id=st.session_state.get("trace_worker_filter") or None)
+    except api_client.ApiError as exc:
+        st.error(str(exc))
+        return
+    st.markdown("#### Run overview")
+    metrics = st.columns(6)
+    metrics[0].metric("Model", ", ".join(overview.get("models") or ["N/A"]))
+    metrics[1].metric("LLM calls", overview.get("llm_calls", 0))
+    metrics[2].metric("Unique units", overview.get("unique_units", 0))
+    metrics[3].metric("Input / output tokens",
+                      f"{overview.get('input_tokens', 'N/A')} / {overview.get('output_tokens', 'N/A')}")
+    metrics[4].metric("LLM avg / P50",
+                      f"{na(overview.get('llm_avg_ms'), '{:.0f}', ' ms')} / "
+                      f"{na(overview.get('llm_p50_ms'), '{:.0f}', ' ms')}")
+    metrics[5].metric("LLM P95", na(overview.get("llm_p95_ms"), "{:.0f}", " ms"))
+    st.caption(f"Trace status: **{overview.get('trace_status', 'pending').upper()}** · "
+               f"token coverage input {overview.get('input_token_coverage', 'N/A')}, "
+               f"output {overview.get('output_token_coverage', 'N/A')} · "
+               f"validation spans {overview.get('validation_spans', 0)} · "
+               f"task status OK/error {overview.get('task_status_ok', 0)}/"
+               f"{overview.get('task_status_error', 0)} · validation status OK/error "
+               f"{overview.get('validation_status_ok', 0)}/{overview.get('validation_status_error', 0)} · "
+               f"unattributed calls {overview.get('unattributed_calls', 0)}")
+    if not calls["items"]:
+        st.info("No LLM trace calls have arrived yet. Scaling results remain independent of trace ingestion.")
+        return
+
+    items = calls["items"]
+    workers = sorted({str(i["attributes"].get("aob.worker_id")) for i in items
+                      if i["attributes"].get("aob.worker_id")})
+    units = sorted({str(i["attributes"].get("aob.unit_id")) for i in items
+                    if i["attributes"].get("aob.unit_id")})
+    f1, f2, f3 = st.columns(3)
+    f1.selectbox("Sort calls", ["start", "duration"], format_func=lambda x: "Start time" if x == "start" else "Duration",
+                 key="trace_sort")
+    f2.selectbox("Worker filter", [""] + workers, key="trace_worker_filter")
+    f3.selectbox("Unit filter", [""] + units, key="trace_unit_filter")
+    items = api_client.demo_llm_calls(token, run_id, limit=250, sort=st.session_state.get("trace_sort", "start"),
+                                      unit_id=st.session_state.get("trace_unit_filter") or None,
+                                      worker_id=st.session_state.get("trace_worker_filter") or None)["items"]
+    if not items:
+        st.info("No calls match the selected filters.")
+        return
+    run_start = run_start or min(i["start_ts"] for i in items)
+    timeline = pd.DataFrame([{
+        "Call": f"{i['attributes'].get('aob.unit_id') or 'UNATTRIBUTED'} · {i['span_id'][:10]}",
+        "Unit ID": i["attributes"].get("aob.unit_id") or "UNATTRIBUTED",
+        "Worker": i["attributes"].get("aob.worker_id") or "N/A",
+        "Attempt": i["attributes"].get("aob.attempt") or "N/A",
+        "Start (s)": i["start_ts"] - run_start,
+        "End (s)": i["end_ts"] - run_start,
+        "Duration (ms)": i["duration_ms"],
+    } for i in items])
+    st.markdown("#### Complete LLM calls timeline")
+    st.caption("Each bar is one persisted inference Span. X-axis is elapsed time from the first observed call; overlapping bars remain concurrent.")
+    chart = alt.Chart(timeline).mark_bar().encode(
+        x=alt.X("Start (s):Q", title="Elapsed seconds from run start"),
+        x2="End (s):Q", y=alt.Y("Call:N", sort=None, title="Unit ID · Span ID"),
+        color=alt.Color("Worker:N", title="Worker"), tooltip=list(timeline.columns),
+    ).properties(height=max(180, min(900, len(items) * 22)), width="container")
+    st.altair_chart(chart, use_container_width=True)
+    st.dataframe(timeline, hide_index=True, width="stretch", height=320)
+    labels = [f"{i['attributes'].get('aob.unit_id') or 'UNATTRIBUTED'} · {i['span_id'][:12]}" for i in items]
+    selected = st.selectbox("Inspect Call", labels, key="trace_selected_call")
+    selected_item = items[labels.index(selected)]
+    st.markdown("#### Selected unit execution detail")
+    st.json({
+        "run_id": run_id, "unit_id": selected_item["attributes"].get("aob.unit_id") or "UNATTRIBUTED",
+        "worker_id": selected_item["attributes"].get("aob.worker_id"), "attempt": selected_item["attributes"].get("aob.attempt"),
+        "span_id": selected_item["span_id"], "trace_id": selected_item["trace_id"],
+        "model": selected_item["attributes"].get("gen_ai.request.model"),
+        "start": selected_item["start_utc"], "end": selected_item["end_utc"],
+        "duration_ms": selected_item["duration_ms"], "status": selected_item["status"],
+        "input_tokens": selected_item["attributes"].get("gen_ai.usage.input_tokens"),
+        "output_tokens": selected_item["attributes"].get("gen_ai.usage.output_tokens"),
+    })
+    unit_id = selected_item["attributes"].get("aob.unit_id")
+    if unit_id:
+        detail = api_client.demo_unit_trace(token, run_id, unit_id)
+        st.markdown("##### Trace waterfall")
+        if detail["spans"]:
+            waterfall = pd.DataFrame([{
+                "Span": s["name"], "Start": s["start_utc"], "Duration (ms)": s["duration_ms"],
+                "Attempt": s["attributes"].get("aob.attempt"), "Status": s["status"],
+            } for s in detail["spans"]])
+            st.dataframe(waterfall, hide_index=True, width="stretch")
+        if not detail.get("workflow_available"):
+            st.caption("Workflow step timings unavailable: no workflow summary was uploaded with this run.")
+
+
 def render(token: str) -> None:
     with st.container(border=True):
         st.subheader("Live GPU demo")
@@ -287,20 +385,18 @@ def _run_panel(token: str, run_id: str, active: bool) -> None:
         if status.get("error_code"):
             st.error(status["error_code"])
 
-        # Validation events
-        st.markdown("#### Validation events")
-        _events_table(token, run_id)
-
-        # Scaling results
-        if (
-            state.get("scaling_status") is None
-            and not state.get("timeline")
-        ):
-            return
-
-        _scaling_overview(state)
-        _live_metrics(points)
-        _timeline(state)
-        _summary(state)
+        gpu_tab, llm_tab = st.tabs(["GPU & Worker Ops", "LLM Observability"])
+        with gpu_tab:
+            st.markdown("#### Validation events")
+            _events_table(token, run_id)
+            if state.get("scaling_status") is not None or state.get("timeline"):
+                _scaling_overview(state)
+                _live_metrics(points)
+                _timeline(state)
+                _summary(state)
+            else:
+                st.info("Scaling telemetry has not arrived yet.")
+        with llm_tab:
+            _llm_observability(token, run_id, status.get("created_at"))
 
     panel()

@@ -102,3 +102,16 @@ def demo_state(token: str, run_id: str) -> dict:
 
 def demo_metrics(token: str, run_id: str) -> list[dict]:
     return _request("GET", f"/api/demo/{run_id}/metrics", **_bearer(token))["points"]
+
+
+def demo_trace_summary(token: str, run_id: str) -> dict:
+    return _request("GET", f"/api/demo/{run_id}/trace-summary", **_bearer(token))
+
+
+def demo_llm_calls(token: str, run_id: str, **params) -> dict:
+    return _request("GET", f"/api/demo/{run_id}/llm-calls",
+                    params={k: v for k, v in params.items() if v is not None}, **_bearer(token))
+
+
+def demo_unit_trace(token: str, run_id: str, unit_id: str) -> dict:
+    return _request("GET", f"/api/demo/{run_id}/units/{unit_id}/trace", **_bearer(token))
