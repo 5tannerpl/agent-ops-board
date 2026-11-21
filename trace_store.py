@@ -65,6 +65,8 @@ def _limited_map(value, allowed: set[str]) -> dict:
 def _timestamp(value) -> tuple[str, float]:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         timestamp = float(value)
+        if timestamp > 100_000_000_000:
+            timestamp /= 1_000_000_000
         text = datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
     elif isinstance(value, str):
         text = value

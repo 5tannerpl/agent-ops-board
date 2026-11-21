@@ -116,6 +116,42 @@ def render_scaling_cell(traced: bool = False) -> str:
 
 TRACE_CHECK_CELL_MARKER = "# AOB_WORKER_TRACE_VERIFICATION"
 TRACE_UPLOAD_CELL_MARKER = "# AOB_TRACE_BATCH_UPLOAD"
+TRACE_UPLOAD_BATCH_SIZE = 200
+
+
+def normalize_console_span(raw: dict, run_id: str) -> dict | None:
+    """Normalize one OpenTelemetry Console Exporter JSON span for upload tests."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+        return None
+    context = raw.get("context") if isinstance(raw.get("context"), dict) else {}
+    trace_id = context.get("trace_id")
+    span_id = context.get("span_id")
+    parent_id = raw.get("parent_id")
+    if not all(isinstance(value, str) for value in (trace_id, span_id)):
+        return None
+    trace_id = trace_id.removeprefix("0x")
+    span_id = span_id.removeprefix("0x")
+    if isinstance(parent_id, str):
+        parent_id = parent_id.removeprefix("0x")
+    attributes = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {}
+    attributes = {key: value for key, value in attributes.items()
+                   if key in {"aob.run_id", "aob.unit_id", "aob.worker_id", "aob.attempt",
+                              "aob.task_id", "gen_ai.operation.name", "gen_ai.request.model",
+                              "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"}
+                   and isinstance(value, (str, int, float, bool)) and len(str(value)) <= 256}
+    if attributes.get("aob.run_id") not in (None, run_id):
+        return None
+    resource = raw.get("resource") if isinstance(raw.get("resource"), dict) else {}
+    resource = resource.get("attributes") if isinstance(resource.get("attributes"), dict) else {}
+    resource = {key: value for key, value in resource.items()
+                if key in {"service.name", "service.version", "deployment.environment.name", "aob.source"}
+                and isinstance(value, (str, int, float, bool)) and len(str(value)) <= 256}
+    start_time, end_time = raw.get("start_time"), raw.get("end_time")
+    if not start_time or not end_time:
+        return None
+    return {"trace_id": trace_id, "span_id": span_id, "parent_id": parent_id,
+            "name": raw["name"], "start_time": start_time, "end_time": end_time,
+            "status": raw.get("status", "UNSET"), "attributes": attributes, "resource": resource}
 
 
 def _trace_commit() -> str:
@@ -249,8 +285,7 @@ def build_trace_upload_cell() -> str:
             spans = []
             trace_log = Path("/kaggle/working/aob-runtime/logs/supervisor.log")
             if not trace_log.is_file():
-                print("TRACE UPLOAD: supervisor.log not found", flush=True)
-                return
+                raise RuntimeError("supervisor.log not found")
             for line in trace_log.read_text(errors="replace").splitlines():
                 try:
                     raw = json.loads(line)
@@ -267,14 +302,27 @@ def build_trace_upload_cell() -> str:
                             and isinstance(v, (str, int, float, bool)) and len(str(v)) <= 256}}
                 if attrs.get("aob.run_id") not in (None, AOB_RUN_ID):
                     continue
+                context = raw.get("context") if isinstance(raw.get("context"), dict) else {{}}
+                trace_id = context.get("trace_id")
+                span_id = context.get("span_id")
+                parent_id = raw.get("parent_id")
+                if isinstance(trace_id, str):
+                    trace_id = trace_id.removeprefix("0x")
+                if isinstance(span_id, str):
+                    span_id = span_id.removeprefix("0x")
+                if isinstance(parent_id, str):
+                    parent_id = parent_id.removeprefix("0x")
                 item = {{
-                    "trace_id": raw.get("trace_id"), "span_id": raw.get("span_id"),
-                    "parent_id": raw.get("parent_id"), "name": raw.get("name"),
+                    "trace_id": trace_id, "span_id": span_id,
+                    "parent_id": parent_id, "name": raw.get("name"),
                     "start_time": raw.get("start_time"), "end_time": raw.get("end_time"),
                     "status": raw.get("status", "UNSET"), "attributes": attrs, "resource": resource
                 }}
                 if item["trace_id"] and item["span_id"] and item["start_time"] and item["end_time"]:
                     spans.append(item)
+            if not spans:
+                raise RuntimeError("no valid spans found in supervisor.log")
+            accepted = duplicates = rejected = 0
             for offset in range(0, len(spans), 200):
                 chunk = spans[offset:offset + 200]
                 payload = json.dumps({{"run_id": AOB_RUN_ID, "batch_id": f"trace-{{offset // 200}}",
@@ -288,16 +336,26 @@ def build_trace_upload_cell() -> str:
                     headers={{"Content-Type": "application/json", "X-AOB-Timestamp": stamp,
                               "X-AOB-Signature": signature}})
                 with urllib.request.urlopen(request, timeout=30) as response:
-                    response.read()
-                print("TRACE UPLOAD: batch", offset // 200, "accepted", len(chunk), flush=True)
-            print("TRACE UPLOAD: complete", len(spans), flush=True)
+                    if not 200 <= response.status < 300:
+                        raise RuntimeError(f"unexpected HTTP status {{response.status}}")
+                    result = json.loads(response.read().decode("utf-8"))
+                if not isinstance(result, dict) or result.get("status") not in ("accepted", "duplicate"):
+                    raise RuntimeError("invalid trace ingestion response")
+                accepted += int(result.get("accepted", 0))
+                duplicates += int(result.get("duplicates", 0))
+                rejected += int(result.get("rejected", 0))
+                print("TRACE UPLOAD: batch", offset // 200, "accepted", result.get("accepted", 0),
+                      "duplicates", result.get("duplicates", 0), "rejected", result.get("rejected", 0),
+                      flush=True)
+            print("TRACE UPLOAD: complete", len(spans), "accepted", accepted,
+                  "duplicates", duplicates, "rejected", rejected, flush=True)
 
         try:
             _aob_trace_upload()
         except Exception as exc:
             print("TRACE UPLOAD: failed", type(exc).__name__, flush=True)
         """
-    )
+    ).lstrip()
 
 
 
@@ -539,7 +597,7 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
     # A previously staged scaling cell is replaced, never duplicated.
     notebook["cells"] = [
         c for c in notebook["cells"]
-        if not _source(c).startswith((SCALING_CELL_MARKER, TRACE_CHECK_CELL_MARKER))
+        if not _source(c).startswith((SCALING_CELL_MARKER, TRACE_CHECK_CELL_MARKER, TRACE_UPLOAD_CELL_MARKER))
     ]
     if any("AOB_RUN_ID = " in _source(c) for c in notebook["cells"]):
         raise LaunchError("Notebook still contains another run credential cell")
