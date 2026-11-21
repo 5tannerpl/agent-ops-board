@@ -185,6 +185,11 @@ def _summary(state: dict) -> None:
 
 def _llm_observability(token: str, run_id: str, run_start: float | None = None) -> None:
     """Render only persisted trace data; no workflow timing is inferred in the UI."""
+    source = st.selectbox("Trace source", ["Kaggle", "External Python Agent (Local)"],
+                          key="observability_source")
+    if source == "External Python Agent (Local)":
+        _external_observability(token)
+        return
     try:
         overview = api_client.demo_trace_summary(token, run_id)
         calls = api_client.demo_llm_calls(token, run_id, limit=250,
@@ -278,6 +283,48 @@ def _llm_observability(token: str, run_id: str, run_start: float | None = None) 
             st.dataframe(waterfall, hide_index=True, width="stretch")
         if not detail.get("workflow_available"):
             st.caption("Workflow step timings unavailable: no workflow summary was uploaded with this run.")
+
+
+def _external_observability(token: str) -> None:
+    try:
+        runs = api_client.external_runs(token)
+    except api_client.ApiError as exc:
+        st.error(str(exc))
+        return
+    if not runs:
+        st.info("No OTLP data from the external Python Agent has been received yet.")
+        return
+    run_id = st.selectbox("External Agent Run ID", [r["run_id"] for r in runs], key="external_run_id")
+    try:
+        summary = api_client.external_summary(token, run_id)
+        units = api_client.external_units(token, run_id)
+        workers = api_client.external_workers(token, run_id)
+        spans = api_client.external_timeline(token, run_id)
+    except api_client.ApiError as exc:
+        st.error(str(exc))
+        return
+    st.caption(f"Trace status: **{summary['trace_status']}** · environment: {summary['environment']}")
+    metrics = st.columns(6)
+    metrics[0].metric("Run ID", run_id)
+    metrics[1].metric("Units", summary["units"])
+    metrics[2].metric("Completed / Failed", f"{summary['completed']} / {summary['failed']}")
+    metrics[3].metric("Workers", summary["workers"])
+    metrics[4].metric("LLM calls", 0)
+    metrics[5].metric("Token usage", "N/A")
+    st.write({
+        "Agent classifications": summary["agent_classifications"],
+        "Tool lookups": summary["tool_lookups"],
+        "Validations": summary["validations"],
+        "Application spans": summary["application_spans"],
+    })
+    st.markdown("#### Unit-level Timeline")
+    st.dataframe(pd.DataFrame(units), hide_index=True, width="stretch")
+    st.markdown("#### Span Parent-child Tree")
+    st.dataframe(pd.DataFrame([{
+        "Span": s["span_name"], "Unit": s["unit_id"], "Worker": s["worker_id"],
+        "Span ID": s["span_id"], "Parent span ID": s["parent_span_id"],
+        "Start": s["start_time"], "Duration (ms)": s["duration_ms"], "Status": s["status"],
+    } for s in spans]), hide_index=True, width="stretch")
 
 
 def render(token: str) -> None:

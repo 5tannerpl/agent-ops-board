@@ -14,6 +14,7 @@ import demo_scaling
 import demo_service
 import demo_store as store
 import trace_store
+import otlp_store
 from api.response_models import error_code
 from security.event_schemas import rejection_diagnostics, validate_payload
 
@@ -280,3 +281,42 @@ def unit_trace(run_id: str, unit_id: str,
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", unit_id):
         raise HTTPException(422, "invalid unit id")
     return trace_store.unit_trace(conn, run_id, unit_id)
+
+
+def external_source() -> str:
+    """Keep source selection server-side; dashboard callers use the configured local source."""
+    return config.get_otlp_source_tokens().keys().__iter__().__next__() if config.get_otlp_source_tokens() else ""
+
+
+@private_router.get("/api/external/runs")
+def external_runs(user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    source_id = external_source()
+    return {"source_id": source_id, "items": otlp_store.list_runs(conn, source_id) if source_id else []}
+
+
+@private_router.get("/api/external/runs/{run_id}/summary")
+def external_run_summary(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    source_id = external_source()
+    return otlp_store.summary(conn, source_id, run_id)
+
+
+@private_router.get("/api/external/runs/{run_id}/units")
+def external_units(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    return {"items": otlp_store.units(conn, external_source(), run_id)}
+
+
+@private_router.get("/api/external/runs/{run_id}/workers")
+def external_workers(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    return {"items": otlp_store.workers(conn, external_source(), run_id)}
+
+
+@private_router.get("/api/external/runs/{run_id}/timeline")
+def external_timeline(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    return {"items": otlp_store.timeline(conn, external_source(), run_id)}
+
+
+@private_router.get("/api/external/runs/{run_id}/units/{unit_id}/spans")
+def external_unit_spans(run_id: str, unit_id: str,
+                        user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    items = [s for s in otlp_store.timeline(conn, external_source(), run_id) if s["unit_id"] == unit_id]
+    return {"run_id": run_id, "unit_id": unit_id, "spans": items}

@@ -115,3 +115,27 @@ def demo_llm_calls(token: str, run_id: str, **params) -> dict:
 
 def demo_unit_trace(token: str, run_id: str, unit_id: str) -> dict:
     return _request("GET", f"/api/demo/{run_id}/units/{unit_id}/trace", **_bearer(token))
+
+
+def external_runs(token: str) -> list[dict]:
+    return _request("GET", "/api/external/runs", **_bearer(token))["items"]
+
+
+def external_summary(token: str, run_id: str) -> dict:
+    return _request("GET", f"/api/external/runs/{run_id}/summary", **_bearer(token))
+
+
+def external_units(token: str, run_id: str) -> list[dict]:
+    return _request("GET", f"/api/external/runs/{run_id}/units", **_bearer(token))["items"]
+
+
+def external_workers(token: str, run_id: str) -> list[dict]:
+    return _request("GET", f"/api/external/runs/{run_id}/workers", **_bearer(token))["items"]
+
+
+def external_timeline(token: str, run_id: str) -> list[dict]:
+    return _request("GET", f"/api/external/runs/{run_id}/timeline", **_bearer(token))["items"]
+
+
+def external_unit_spans(token: str, run_id: str, unit_id: str) -> list[dict]:
+    return _request("GET", f"/api/external/runs/{run_id}/units/{unit_id}/spans", **_bearer(token))["spans"]

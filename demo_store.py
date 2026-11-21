@@ -12,6 +12,7 @@ import sqlite3
 import config
 from storage import db
 import trace_store
+import otlp_store
 
 ACTIVE = ("submitting", "queued", "running")
 TERMINAL = ("complete", "failed", "cancelled")
@@ -61,6 +62,7 @@ def connect() -> sqlite3.Connection:
     conn = db.connect(config.DEMO_DB_PATH)
     conn.executescript(SCHEMA)
     trace_store.connect(conn)
+    otlp_store.connect(conn)
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(demo_runs)")}
     for name, ddl in (
             ("mode", "TEXT"),

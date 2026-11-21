@@ -1,5 +1,6 @@
 """Central configuration, overridable through AOB_* environment variables."""
 import os
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -84,7 +85,23 @@ EVENT_KEY_VERSION = int(os.environ.get("AOB_EVENT_KEY_VERSION", "1"))
 TRACE_SCHEMA_VERSION = 1
 TRACE_MAX_BATCH_BYTES = 512 * 1024
 TRACE_MAX_BATCHES_PER_RUN = 32
+OTLP_MAX_BYTES = int(os.environ.get("AOB_OTLP_MAX_BYTES", str(2 * 1024 * 1024)))
+OTLP_MAX_SPANS = int(os.environ.get("AOB_OTLP_MAX_SPANS", "1000"))
+OTLP_SOURCE_TOKENS = os.environ.get("AOB_OTLP_SOURCE_TOKENS", "")
 EVENT_FINALIZATION_GRACE_SECONDS = float(os.environ.get("AOB_EVENT_FINALIZATION_GRACE_SECONDS", "300"))
+
+
+def get_otlp_source_tokens() -> dict[str, str]:
+    """Return source_id -> bearer token mappings, never accepting source identity from the client."""
+    raw = OTLP_SOURCE_TOKENS.strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return {}
+    return {str(k): str(v) for k, v in value.items()
+            if isinstance(k, str) and k and isinstance(v, str) and v}
 
 KAGGLE_BIN = os.environ.get("AOB_KAGGLE_BIN", "kaggle")
 KAGGLE_NOTEBOOK_DIR = Path(os.environ.get("AOB_KAGGLE_NOTEBOOK_DIR", ROOT / "kaggle-notebook"))

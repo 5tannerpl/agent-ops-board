@@ -23,6 +23,7 @@ mdurl==0.1.2
 packaging==26.3
 platformdirs==4.14.5
 protobuf==7.36.2
+opentelemetry-proto==1.39.1
 pydantic==2.14.3
 pydantic-core==2.50.4
 PyJWT==2.15.1
