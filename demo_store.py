@@ -11,6 +11,7 @@ import sqlite3
 
 import config
 from storage import db
+import trace_store
 
 ACTIVE = ("submitting", "queued", "running")
 TERMINAL = ("complete", "failed", "cancelled")
@@ -59,6 +60,7 @@ class EventExpired(EventRejected):
 def connect() -> sqlite3.Connection:
     conn = db.connect(config.DEMO_DB_PATH)
     conn.executescript(SCHEMA)
+    trace_store.connect(conn)
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(demo_runs)")}
     for name, ddl in (
             ("mode", "TEXT"),
@@ -73,6 +75,11 @@ def connect() -> sqlite3.Connection:
             except sqlite3.OperationalError:
                 pass  # another connection migrated first
     return conn
+
+
+def trace_accepting(conn, run_id: str) -> bool:
+    run = conn.execute("SELECT event_expires_at FROM demo_runs WHERE run_id=?", (run_id,)).fetchone()
+    return bool(run and (run["event_expires_at"] is None or db.now() <= run["event_expires_at"]))
 
 
 def get_run(conn, run_id: str) -> dict | None:

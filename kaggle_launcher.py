@@ -115,6 +115,7 @@ def render_scaling_cell(traced: bool = False) -> str:
     )
 
 TRACE_CHECK_CELL_MARKER = "# AOB_WORKER_TRACE_VERIFICATION"
+TRACE_UPLOAD_CELL_MARKER = "# AOB_TRACE_BATCH_UPLOAD"
 
 
 def _trace_commit() -> str:
@@ -222,6 +223,83 @@ def build_trace_check_cell() -> str:
     ).lstrip()
 
 
+def build_trace_upload_cell() -> str:
+    """Generate a post-run exporter that sends only the trace allowlist."""
+    return textwrap.dedent(
+        f"""
+        {TRACE_UPLOAD_CELL_MARKER}
+        import hashlib
+        import hmac
+        import json
+        import time
+        import urllib.request
+        from pathlib import Path
+
+        def _aob_trace_upload():
+            if os.environ.get("AOB_OTEL_ENABLED") != "true" or not AOB_TRACE_URL:
+                print("TRACE UPLOAD: not configured", flush=True)
+                return
+            allowed = {{
+                "aob.run_id", "aob.unit_id", "aob.worker_id", "aob.attempt", "aob.task_id",
+                "aob.scaling_mode", "aob.units", "gen_ai.operation.name", "gen_ai.request.model",
+                "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "service.name",
+                "service.version", "deployment.environment.name"
+            }}
+            resource_allowed = {{"service.name", "service.version", "deployment.environment.name", "aob.source"}}
+            spans = []
+            trace_log = Path("/kaggle/working/aob-runtime/logs/supervisor.log")
+            if not trace_log.is_file():
+                print("TRACE UPLOAD: supervisor.log not found", flush=True)
+                return
+            for line in trace_log.read_text(errors="replace").splitlines():
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+                    continue
+                attrs = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {{}}
+                attrs = {{k: v for k, v in attrs.items() if k in allowed and isinstance(v, (str, int, float, bool))
+                         and len(str(v)) <= 256}}
+                resource = raw.get("resource") if isinstance(raw.get("resource"), dict) else {{}}
+                resource = resource.get("attributes") if isinstance(resource.get("attributes"), dict) else {{}}
+                resource = {{k: v for k, v in resource.items() if k in resource_allowed
+                            and isinstance(v, (str, int, float, bool)) and len(str(v)) <= 256}}
+                if attrs.get("aob.run_id") not in (None, AOB_RUN_ID):
+                    continue
+                item = {{
+                    "trace_id": raw.get("trace_id"), "span_id": raw.get("span_id"),
+                    "parent_id": raw.get("parent_id"), "name": raw.get("name"),
+                    "start_time": raw.get("start_time"), "end_time": raw.get("end_time"),
+                    "status": raw.get("status", "UNSET"), "attributes": attrs, "resource": resource
+                }}
+                if item["trace_id"] and item["span_id"] and item["start_time"] and item["end_time"]:
+                    spans.append(item)
+            for offset in range(0, len(spans), 200):
+                chunk = spans[offset:offset + 200]
+                payload = json.dumps({{"run_id": AOB_RUN_ID, "batch_id": f"trace-{{offset // 200}}",
+                                      "schema_version": 1, "final": offset + 200 >= len(spans),
+                                      "spans": chunk}}, separators=(",", ":")).encode()
+                stamp = str(int(time.time()))
+                signature = "sha256=" + hmac.new(_AOB_KEY.encode(), stamp.encode() + b"." + payload,
+                                                  hashlib.sha256).hexdigest()
+                request = urllib.request.Request(
+                    AOB_TRACE_URL, data=payload, method="POST",
+                    headers={{"Content-Type": "application/json", "X-AOB-Timestamp": stamp,
+                              "X-AOB-Signature": signature}})
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    response.read()
+                print("TRACE UPLOAD: batch", offset // 200, "accepted", len(chunk), flush=True)
+            print("TRACE UPLOAD: complete", len(spans), flush=True)
+
+        try:
+            _aob_trace_upload()
+        except Exception as exc:
+            print("TRACE UPLOAD: failed", type(exc).__name__, flush=True)
+        """
+    )
+
+
 
 class LaunchError(Exception):
     """Launcher input, Kaggle CLI or notebook staging failure."""
@@ -274,11 +352,15 @@ def render_prelude(run_id: str, mode: str = "light", units: int | None = None, k
         raise LaunchError("Event signing and AOB_EVENTS_URL must be configured")
     if not config.EVENTS_PUBLIC_URL.startswith("https://"):
         raise LaunchError("AOB_EVENTS_URL must be a public HTTPS endpoint")
+    trace_url = config.TRACE_PUBLIC_URL or config.EVENTS_PUBLIC_URL.rsplit("/api/events", 1)[0] + "/api/traces"
+    if not trace_url.startswith("https://"):
+        raise LaunchError("AOB_TRACE_URL must be a public HTTPS endpoint")
     return ("# Staged by Agent Ops Board. PRIVATE notebook only.\n"
             f"AOB_RUN_ID = {run_id!r}\n"
             f"AOB_DEMO_MODE = {mode!r}\n"
             f"AOB_DEMO_UNITS = {units if mode == 'high_concurrency' else None!r}\n"
             f"AOB_EVENTS_URL = {config.EVENTS_PUBLIC_URL!r}\n"
+            f"AOB_TRACE_URL = {trace_url!r}\n"
             f"_AOB_KEY = {demo_auth.run_event_key(run_id, key_version)!r}\n"
             + PRELUDE_BODY + _trace_prelude())
 
@@ -509,6 +591,8 @@ def stage_notebook(run_id: str, target: Path, mode: str = "light", units: int | 
     notebook["cells"].insert(1, _code_cell('aob_emit("notebook_started", {"status": "running"})\n'))
     notebook["cells"].append(_code_cell(render_scaling_cell(traced)))
     notebook["cells"].append(_code_cell(build_trace_check_cell()))
+    if traced:
+        notebook["cells"].append(_code_cell(build_trace_upload_cell()))
     for cell in notebook["cells"]:
         if cell.get("cell_type") == "code":
             cell["execution_count"] = None

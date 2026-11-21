@@ -13,6 +13,7 @@ import demo_auth
 import demo_scaling
 import demo_service
 import demo_store as store
+import trace_store
 from api.response_models import error_code
 from security.event_schemas import rejection_diagnostics, validate_payload
 
@@ -135,6 +136,14 @@ class EventIn(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class TraceBatchIn(BaseModel):
+    batch_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(pattern=store.RUN_ID_RE.pattern)
+    spans: list[dict] = Field(min_length=1, max_length=trace_store.MAX_SPANS_PER_BATCH)
+    schema_version: int = Field(default=config.TRACE_SCHEMA_VERSION, ge=1, le=10)
+    final: bool = False
+
+
 def _log_rejection(event_type, exc: Exception, scope: str) -> None:
     for item in rejection_diagnostics(event_type, exc, scope):
         log.warning("event rejected: event_type=%s field=%s error_type=%s", item["event_type"], item["field"],
@@ -198,3 +207,76 @@ async def receive_event(request: Request):
         _log_rejection(event.event_type, exc, "payload")
         raise HTTPException(422, "invalid event")
     return {"status": await run_in_threadpool(ingest_event, event)}
+
+
+@ingress_router.post("/api/traces", status_code=202)
+async def receive_trace_batch(request: Request):
+    """Receive a bounded, allowlisted post-run trace batch."""
+    if not config.get_event_secret():
+        raise HTTPException(503, "Trace ingest is not configured")
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > config.TRACE_MAX_BATCH_BYTES:
+        raise HTTPException(413, "trace batch too large")
+    if "application/json" not in (request.headers.get("content-type") or "").lower():
+        raise HTTPException(415, "content type must be application/json")
+    body = await request.body()
+    if len(body) > config.TRACE_MAX_BATCH_BYTES:
+        raise HTTPException(413, "trace batch too large")
+    try:
+        raw = json.loads(body)
+        run_id = raw["run_id"]
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(400, "malformed trace batch")
+    if not isinstance(run_id, str) or not store.RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(400, "malformed trace batch")
+    conn = store.connect()
+    try:
+        run = store.get_run(conn, run_id)
+        batches = conn.execute("SELECT COUNT(*) FROM trace_batches WHERE run_id=?", (run_id,)).fetchone()[0]
+    finally:
+        conn.close()
+    version = int((run or {}).get("event_key_version") or config.EVENT_KEY_VERSION)
+    if not demo_auth.verify_event(run_id, request.headers.get("x-aob-timestamp"),
+                                  request.headers.get("x-aob-signature"), body, version):
+        raise HTTPException(401, "invalid trace signature")
+    if run is None:
+        raise HTTPException(401, "invalid trace signature")
+    if batches >= config.TRACE_MAX_BATCHES_PER_RUN:
+        raise HTTPException(429, "trace batch limit reached for this run")
+    conn = store.connect()
+    try:
+        if not store.trace_accepting(conn, run_id):
+            raise HTTPException(410, "run is no longer accepting traces")
+        try:
+            batch = TraceBatchIn.model_validate(raw)
+            result = trace_store.ingest(conn, batch.run_id, batch.batch_id, batch.spans,
+                                        batch.schema_version, batch.final)
+        except (ValidationError, trace_store.TraceValidationError) as exc:
+            raise HTTPException(422, "invalid trace batch") from exc
+        return result
+    finally:
+        conn.close()
+
+
+@private_router.get("/api/demo/{run_id}/trace-summary")
+def trace_summary(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    run = owned_run(conn, run_id, user)
+    return trace_store.summary(conn, run_id, run.get("units"))
+
+
+@private_router.get("/api/demo/{run_id}/llm-calls")
+def llm_calls(run_id: str, limit: int = Query(100, ge=1, le=250), offset: int = Query(0, ge=0),
+              sort: Literal["start", "duration"] = "start", unit_id: str | None = None,
+              worker_id: str | None = None, attempt: int | None = Query(None, ge=1),
+              user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    owned_run(conn, run_id, user)
+    return trace_store.calls(conn, run_id, limit, offset, sort, unit_id, worker_id, attempt)
+
+
+@private_router.get("/api/demo/{run_id}/units/{unit_id}/trace")
+def unit_trace(run_id: str, unit_id: str,
+               user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    owned_run(conn, run_id, user)
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", unit_id):
+        raise HTTPException(422, "invalid unit id")
+    return trace_store.unit_trace(conn, run_id, unit_id)

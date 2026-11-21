@@ -76,10 +76,14 @@ def get_event_secret() -> str:
             return ""
     return EVENT_SECRET.strip()
 EVENTS_PUBLIC_URL = os.environ.get("AOB_EVENTS_URL", "")  # e.g. https://demo.example.com/api/events
+TRACE_PUBLIC_URL = os.environ.get("AOB_TRACE_URL", "")  # e.g. https://demo.example.com/api/traces
 EVENT_MAX_BYTES = 64 * 1024
 EVENT_MAX_SKEW_SECONDS = 300
 EVENT_MAX_PER_RUN = 1000
 EVENT_KEY_VERSION = int(os.environ.get("AOB_EVENT_KEY_VERSION", "1"))
+TRACE_SCHEMA_VERSION = 1
+TRACE_MAX_BATCH_BYTES = 512 * 1024
+TRACE_MAX_BATCHES_PER_RUN = 32
 EVENT_FINALIZATION_GRACE_SECONDS = float(os.environ.get("AOB_EVENT_FINALIZATION_GRACE_SECONDS", "300"))
 
 KAGGLE_BIN = os.environ.get("AOB_KAGGLE_BIN", "kaggle")
