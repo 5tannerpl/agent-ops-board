@@ -94,7 +94,9 @@ class Worker:
                 try:
                     with model_client.unit_context(job.unit_id):
                         with otel.span("aob.worker.task", {"aob.worker_id": self.worker_id,
-                                                           "aob.task_id": job.job_id}):
+                                                           "aob.task_id": job.job_id,
+                                                           "aob.unit_id": job.unit_id,
+                                                           "aob.attempt": job.attempt}):
                             self._process(job)
                 except LeaseLost:
                     log_event(self.conn, self.worker_id, job.unit_id, None, "LEASE_LOST", job.attempt,

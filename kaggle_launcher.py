@@ -129,6 +129,7 @@ def build_trace_check_cell() -> str:
         f"""
         {TRACE_CHECK_CELL_MARKER}
         import json
+        import os
         from collections import Counter
         from pathlib import Path
 
@@ -150,12 +151,49 @@ def build_trace_check_cell() -> str:
 
         span_counts = Counter(span["name"] for span in spans)
         task_spans = [span for span in spans if span["name"] == "aob.worker.task"]
-        unit_ids = {{
-            span.get("attributes", {{}}).get("aob.unit_id")
+        task_attributes = [
+            span.get("attributes") if isinstance(span.get("attributes"), dict) else {{}}
             for span in task_spans
-            if isinstance(span.get("attributes"), dict)
+        ]
+        unit_ids = {{
+            attributes.get("aob.unit_id") for attributes in task_attributes
+            if attributes.get("aob.unit_id") is not None
         }}
-        unit_ids.discard(None)
+        missing_unit_ids = sum(
+            1 for attributes in task_attributes
+            if not isinstance(attributes.get("aob.unit_id"), str) or not attributes.get("aob.unit_id")
+        )
+        attempt_combinations = [
+            (attributes.get("aob.unit_id"), attributes.get("aob.attempt"))
+            for attributes in task_attributes
+            if attributes.get("aob.unit_id") is not None and attributes.get("aob.attempt") is not None
+        ]
+        duplicate_attempts = {{
+            combination: count for combination, count in Counter(attempt_combinations).items()
+            if count > 1
+        }}
+        run_ids = {{
+            attributes.get("aob.run_id") for attributes in
+            [span.get("attributes", {{}}) for span in spans]
+            if isinstance(attributes, dict) and attributes.get("aob.run_id") is not None
+        }}
+        missing_run_ids = sum(
+            1 for span in spans
+            if not isinstance(span.get("attributes"), dict)
+            or span["attributes"].get("aob.run_id") is None
+        )
+        expected_run_id = os.environ.get("AOB_RUN_ID")
+        run_id_consistent = bool(spans) and not missing_run_ids and run_ids == {{expected_run_id}}
+        diagnostics = []
+        if missing_unit_ids:
+            diagnostics.append(f"missing unit IDs on {{missing_unit_ids}} task span(s)")
+        if duplicate_attempts:
+            diagnostics.append(f"duplicate (unit ID, attempt) combinations: {{duplicate_attempts}}")
+        if not run_id_consistent:
+            diagnostics.append(
+                f"run ID mismatch: expected {{expected_run_id}}, found {{sorted(run_ids)}}, "
+                f"missing on {{missing_run_ids}} span(s)"
+            )
 
         print("=== AOB WORKER TRACE VERIFICATION ===")
         print("Total Spans:", len(spans))
@@ -165,6 +203,13 @@ def build_trace_check_cell() -> str:
         ))
         print("Validation Spans:", span_counts["aob.result.validation"])
         print("Unique Unit IDs:", len(unit_ids))
+        print("Missing Unit IDs:", missing_unit_ids)
+        print("Duplicate (Unit ID, Attempt) combinations:", duplicate_attempts)
+        print("Run ID consistency:", "PASS" if run_id_consistent else "FAIL")
+        if diagnostics:
+            print("TRACE CHECK: FAILED -", "; ".join(diagnostics))
+        else:
+            print("TRACE CHECK: PASSED")
         for span in task_spans[:5]:
             attributes = span.get("attributes", {{}})
             print(

@@ -263,11 +263,18 @@ def test_light_demo_exports_correlated_worker_traces(tmp_path, monkeypatch):
     tasks = [s for s in spans if s["name"] == "aob.worker.task"]
     assert len(tasks) == 2
     for task in tasks:
+        attributes = task["attributes"]
+        assert attributes["aob.worker_id"].startswith("worker-")
+        assert attributes["aob.task_id"] > 0
+        assert attributes["aob.unit_id"]
+        assert attributes["aob.attempt"] == 1
         trace = [s for s in spans if s["context"]["trace_id"] == task["context"]["trace_id"]]
         assert all(s["attributes"]["aob.run_id"] == run_id for s in trace)
         assert any(s["name"] == "aob.run" and s["context"]["span_id"] == task["parent_id"] for s in trace)
         children = {s["name"] for s in trace if s["parent_id"] == task["context"]["span_id"]}
         assert children == {f"chat {env.model_alias}", "aob.result.validation"}
+        assert all(s["parent_id"] == task["context"]["span_id"]
+                   for s in trace if s["name"] in {f"chat {env.model_alias}", "aob.result.validation"})
 
 
 def test_dual_gpu_scaling_end_to_end_with_fake_llama(tmp_path, monkeypatch):
