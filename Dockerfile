@@ -11,6 +11,7 @@ COPY requirements.lock .
 RUN python -m pip install --no-cache-dir --requirement requirements.lock
 
 COPY api ./api
+COPY dashboard ./dashboard
 COPY security ./security
 COPY storage ./storage
 COPY intake ./intake
@@ -19,11 +20,11 @@ COPY workers ./workers
 COPY scaling ./scaling
 COPY orchestration ./orchestration
 COPY adapters ./adapters
-COPY config.py demo_api.py demo_auth.py demo_scaling.py demo_service.py demo_store.py kaggle_launcher.py ./
+COPY config.py demo_api.py demo_auth.py demo_scaling.py demo_service.py demo_store.py kaggle_launcher.py otlp_api.py otlp_store.py trace_store.py ./
 
 RUN addgroup --system --gid 10001 aob \
     && adduser --system --uid 10001 --ingroup aob aob \
-    && mkdir -p /var/lib/aob \
+    && mkdir -p /var/lib/aob /app/.streamlit \
     && chown -R aob:aob /app /var/lib/aob
 
 USER aob

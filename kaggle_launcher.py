@@ -408,10 +408,16 @@ def render_prelude(run_id: str, mode: str = "light", units: int | None = None, k
         raise LaunchError("Invalid demo unit count")
     if not config.get_event_secret() or not config.EVENTS_PUBLIC_URL:
         raise LaunchError("Event signing and AOB_EVENTS_URL must be configured")
-    if not config.EVENTS_PUBLIC_URL.startswith("https://"):
+    if config.AOB_ENV == "staging":
+        if config.EVENTS_PUBLIC_URL != config.STAGING_EVENTS_URL:
+            raise LaunchError("Staging AOB_EVENTS_URL must be the isolated event-ingress service")
+    elif not config.EVENTS_PUBLIC_URL.startswith("https://"):
         raise LaunchError("AOB_EVENTS_URL must be a public HTTPS endpoint")
     trace_url = config.TRACE_PUBLIC_URL or config.EVENTS_PUBLIC_URL.rsplit("/api/events", 1)[0] + "/api/traces"
-    if not trace_url.startswith("https://"):
+    if config.AOB_ENV == "staging":
+        if trace_url != "http://event-ingress:8011/api/traces":
+            raise LaunchError("Staging AOB_TRACE_URL must use the isolated event-ingress service")
+    elif not trace_url.startswith("https://"):
         raise LaunchError("AOB_TRACE_URL must be a public HTTPS endpoint")
     return ("# Staged by Agent Ops Board. PRIVATE notebook only.\n"
             f"AOB_RUN_ID = {run_id!r}\n"

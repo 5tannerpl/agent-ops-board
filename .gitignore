@@ -225,3 +225,8 @@ allowed_users.json
 # Agent Ops Board runtime state
 runtime/*
 !runtime/.gitkeep
+
+# Isolated Compose local configuration and host secrets
+deploy/oci/.env.isolated
+deploy/oci/.env.isolated.local
+deploy/oci/secrets/

@@ -78,6 +78,7 @@ def get_event_secret() -> str:
     return EVENT_SECRET.strip()
 EVENTS_PUBLIC_URL = os.environ.get("AOB_EVENTS_URL", "")  # e.g. https://demo.example.com/api/events
 TRACE_PUBLIC_URL = os.environ.get("AOB_TRACE_URL", "")  # e.g. https://demo.example.com/api/traces
+STAGING_EVENTS_URL = "http://event-ingress:8011/api/events"
 EVENT_MAX_BYTES = 64 * 1024
 EVENT_MAX_SKEW_SECONDS = 300
 EVENT_MAX_PER_RUN = 1000

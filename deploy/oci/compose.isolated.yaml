@@ -1,0 +1,169 @@
+name: aob-isolated
+
+services:
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
+    image: ${AOB_IMAGE:-agent-ops-board:isolate-arm64}
+    command:
+      [
+        "streamlit",
+        "run",
+        "dashboard/app.py",
+        "--server.address=0.0.0.0",
+        "--server.port=8501",
+        "--server.headless=true",
+      ]
+    environment:
+      AOB_ENV: ${AOB_ENV:-production}
+      AOB_API_URL: http://control-api:8010
+      PYTHONPATH: /app:/app/dashboard
+    secrets:
+      - streamlit_config
+    networks:
+      - aob_isolated_edge
+      - aob_isolated_control
+    ports:
+      - "127.0.0.1:18501:8501"
+    depends_on:
+      control-api:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1536m
+    pids_limit: 128
+
+  control-api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
+    image: ${AOB_IMAGE:-agent-ops-board:isolate-arm64}
+    command:
+      ["uvicorn", "api.private_app:app", "--host", "0.0.0.0", "--port", "8010"]
+    environment:
+      AOB_ENV: ${AOB_ENV:-production}
+      AOB_AUTH0_DOMAIN: ${AOB_AUTH0_DOMAIN:?set Auth0 domain}
+      AOB_AUTH0_AUDIENCE: ${AOB_AUTH0_AUDIENCE:?set Auth0 audience}
+      AOB_EVENTS_URL: ${AOB_EVENTS_URL:?set public events URL}
+      AOB_EVENT_SECRET_FILE: /run/secrets/aob_event_secret
+      AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users.json
+      AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
+      AOB_DB_PATH: /var/lib/aob/intake.db
+      KAGGLE_CONFIG_DIR: /run/secrets
+      AOB_KAGGLE_BIN: kaggle
+      PYTHONPATH: /app:/app/dashboard
+      HOME: /tmp
+    secrets:
+      - aob_event_secret
+      - source: allowed_users
+        target: allowed_users.json
+      - source: kaggle
+        target: kaggle.json
+    volumes:
+      - aob-isolated-data:/var/lib/aob
+    networks:
+      - aob_isolated_control
+      - aob_isolated_edge
+      - aob_isolated_egress
+    ports:
+      - "127.0.0.1:18010:8010"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    cpus: 1.0
+
+  event-ingress:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
+    image: ${AOB_IMAGE:-agent-ops-board:isolate-arm64}
+    command:
+      [
+        "uvicorn",
+        "api.public_ingress:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8011",
+      ]
+    environment:
+      AOB_ENV: ${AOB_ENV:-production}
+      AOB_AUTH0_DOMAIN: ${AOB_AUTH0_DOMAIN:?set Auth0 domain}
+      AOB_AUTH0_AUDIENCE: ${AOB_AUTH0_AUDIENCE:?set Auth0 audience}
+      AOB_EVENTS_URL: ${AOB_EVENTS_URL:?set public events URL}
+      AOB_EVENT_SECRET_FILE: /run/secrets/aob_event_secret
+      AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users.json
+      AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
+      AOB_OTLP_SOURCE_TOKENS: ${AOB_OTLP_SOURCE_TOKENS:?set OTLP source tokens}
+      PYTHONPATH: /app:/app/dashboard
+    secrets:
+      - aob_event_secret
+      - source: allowed_users
+        target: allowed_users.json
+    volumes:
+      - aob-isolated-data:/var/lib/aob
+    networks:
+      - aob_isolated_edge
+    ports:
+      - "127.0.0.1:18011:8011"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/healthz', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+
+volumes:
+  aob-isolated-data:
+    name: aob-isolated-data
+
+secrets:
+  aob_event_secret:
+    file: ${AOB_SECRETS_DIR:-/srv/aob-isolated/secrets}/event-secret
+  allowed_users:
+    file: ${AOB_SECRETS_DIR:-/srv/aob-isolated/secrets}/allowed_users.json
+  kaggle:
+    file: ${AOB_SECRETS_DIR:-/srv/aob-isolated/secrets}/kaggle.json
+  streamlit_config:
+    file: ${AOB_SECRETS_DIR:-/srv/aob-isolated/secrets}/streamlit-secrets.toml
+
+networks:
+  aob_isolated_control:
+    name: aob-isolated-control
+    internal: true
+  aob_isolated_edge:
+    name: aob-isolated-edge
+  aob_isolated_egress:
+    name: aob-isolated-egress
