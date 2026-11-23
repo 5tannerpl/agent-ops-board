@@ -9,3 +9,4 @@ pydantic>=2.5
 pytest>=8.0
 PyJWT[crypto]>=2.8
 kaggle>=1.7,<2
+opentelemetry-proto==1.45.2

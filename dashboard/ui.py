@@ -48,7 +48,11 @@ def page_header(title: str) -> str | None:
     """Page chrome plus the Auth0 login gate; returns the API access token (None if login is disabled)."""
     st.set_page_config(page_title=f"Agent Ops Board — {title}", layout="wide", page_icon="🛰️")
     st.title(title)
-    st.caption("🧪 **Synthetic Demo** — synthetic, non-confidential content. No account updates or external replies.")
+    with st.container(border=True):
+        st.markdown("#### Cross-platform agent observability")
+        st.write("Monitor GPU workstation health, follow agent task progress, and see the LLM steps behind each "
+                 "result in one place.")
+        st.caption("Current sources: Kaggle GPU agents and agents deployed on Azure.")
     return auth_gate.require_login()
 
 

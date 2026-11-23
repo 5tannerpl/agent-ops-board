@@ -329,10 +329,13 @@ def _external_observability(token: str) -> None:
 
 def render(token: str) -> None:
     with st.container(border=True):
-        st.subheader("Live GPU demo")
-        st.caption("Runs a real model check and a Worker/GPU autoscaling experiment as a Kaggle GPU **batch**. "
-                   "Kaggle queue time is not guaranteed and the model is not online after the batch ends; "
-                   "events and results stay here.")
+        st.subheader("Cross-platform agent observability")
+        st.caption("Agent Ops Board brings together agents from different platforms so you can monitor them in one "
+                   "place. Current sources include Kaggle GPU agents and agents deployed on Azure. This demo checks "
+                   "the Kaggle GPU workstation and follows an agent run from start to finish, including model calls, "
+                   "tool lookups, validations, timings, and other events behind each task. It runs as a temporary "
+                   "Kaggle GPU **batch**; queue time is not guaranteed, and the events and results stay here after "
+                   "the batch ends.")
         try:
             runs = api_client.demo_runs(token)
         except api_client.ApiError as exc:
