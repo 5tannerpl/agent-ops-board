@@ -1,4 +1,5 @@
 fastapi>=0.110
+six>=1.17,<2
 uvicorn>=0.29
 streamlit[auth]>=1.67
 altair>=6.0
@@ -7,3 +8,4 @@ pandas>=2.0
 pydantic>=2.5
 pytest>=8.0
 PyJWT[crypto]>=2.8
+kaggle>=1.7,<2

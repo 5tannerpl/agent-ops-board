@@ -4,6 +4,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
+    
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -24,8 +28,10 @@ COPY config.py demo_api.py demo_auth.py demo_scaling.py demo_service.py demo_sto
 
 RUN addgroup --system --gid 10001 aob \
     && adduser --system --uid 10001 --ingroup aob aob \
-    && mkdir -p /var/lib/aob /app/.streamlit \
-    && chown -R aob:aob /app /var/lib/aob
+    && mkdir -p /var/lib/aob /app/.streamlit /home/aob \
+    && chown -R aob:aob /app /var/lib/aob /home/aob
+
+ENV HOME=/home/aob
 
 USER aob
 EXPOSE 8010 8011

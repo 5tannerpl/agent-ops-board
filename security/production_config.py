@@ -42,15 +42,12 @@ def validate_production_config() -> None:
         missing.append("AOB_ALLOWED_USERS_FILE")
     if not config.EVENT_SECRET_FILE.is_file() or not config.get_event_secret():
         missing.append("AOB_EVENT_SECRET_FILE")
-    if config.AOB_ENV == "production":
-        valid_events_url = (
-            config.EVENTS_PUBLIC_URL.startswith("https://")
-            and config.EVENTS_PUBLIC_URL.endswith("/api/events")
-        )
-        url_hint = "AOB_EVENTS_URL=https://.../api/events"
-    else:
-        valid_events_url = _is_staging_events_url(config.EVENTS_PUBLIC_URL)
-        url_hint = "AOB_EVENTS_URL=http://event-ingress:8011/api/events"
+    valid_events_url = (
+        config.EVENTS_PUBLIC_URL.startswith("https://")
+        and config.EVENTS_PUBLIC_URL.endswith("/api/events")
+    )
+
+    url_hint = "AOB_EVENTS_URL=https://.../api/events"
     if not valid_events_url:
         missing.append(url_hint)
     if missing:
