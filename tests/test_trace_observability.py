@@ -40,7 +40,7 @@ def _post_trace(client, run_id, spans, batch_id="batch-1", final=True):
 def test_trace_ingestion_is_signed_bounded_and_idempotent(demo):
     run_id = demo.post("/api/demo/start", headers=auth()).json()["run_id"]
     task = _span("aob.worker.task", "1" * 16, **{"aob.unit_id": "unit-1", "aob.worker_id": "worker-1",
-                                                  "aob.attempt": 1})
+                                                  "aob.attempt": 1, "aob.task_id": 42})
     llm = _span("chat test-model", "2" * 16, "1" * 16, **{"gen_ai.operation.name": "chat",
                                                            "gen_ai.request.model": "test-model",
                                                            "gen_ai.usage.input_tokens": 10,
@@ -54,7 +54,12 @@ def test_trace_ingestion_is_signed_bounded_and_idempotent(demo):
     assert summary["input_tokens"] == 10 and summary["output_tokens"] == 4
     calls = demo.get(f"/api/demo/{run_id}/llm-calls", headers=auth()).json()["items"]
     assert calls[0]["attributes"]["aob.unit_id"] == "unit-1"
-    assert demo.get(f"/api/demo/{run_id}/units/unit-1/trace", headers=auth()).json()["spans"]
+    observed = demo.get(f"/api/demo/{run_id}/units/unit-1/trace", headers=auth()).json()["spans"]
+    task = next(s for s in observed if s["role"] == "unit_execution")
+    assert task["task_id"] == "42" and task["attributes"]["aob.task_id"] == 42
+    v1 = summary["schema_v1"]
+    assert v1["trace_status"] == "PARTIAL" and v1["reported_final"] is True
+    assert v1["validation_unknown"] == v1["unknown_outcome_units"] == v1["llm_calls"] == 1
 
 
 def test_trace_rejects_bad_signature_and_sensitive_attributes(demo):

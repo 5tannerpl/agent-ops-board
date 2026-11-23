@@ -6,6 +6,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 
+import otlp_semantics as semantics
 from storage import db
 
 TRACE_ID_RE = re.compile(r"^[0-9a-fA-F]{16,64}$")
@@ -162,8 +163,13 @@ def _rows(conn, run_id: str) -> list[dict]:
         item["attributes"] = json.loads(item["attributes"])
         item["resource_metadata"] = json.loads(item["resource_metadata"])
         item["duration_ms"] = max(0.0, (item["end_ts"] - item["start_ts"]) * 1000)
-        return_item = item
-        result.append(return_item)
+        attrs = item["attributes"]
+        item["span_name"] = item["name"]
+        item["role"] = semantics.role(item)
+        item["unit_id"] = attrs.get("aob.unit_id")
+        task_id = attrs.get("aob.task_id")
+        item["task_id"] = str(task_id) if type(task_id) in (int, str) else None
+        result.append(item)
     return result
 
 
@@ -205,7 +211,17 @@ def summary(conn: sqlite3.Connection, run_id: str, expected_units: int | None = 
     batches = conn.execute("SELECT COALESCE(SUM(accepted_span_count),0),COALESCE(SUM(rejected_count),0),"
                            "COALESCE(SUM(duplicate_count),0),MAX(finalized) FROM trace_batches WHERE run_id=?",
                            (run_id,)).fetchone()
-    return {"trace_status": "complete" if batches[3] else ("partial" if spans else "pending"),
+    # The signed final flag is producer evidence, not an OTLP manifest or proof of graph completeness.
+    environments = {s["resource_metadata"].get("deployment.environment.name") for s in spans}
+    v1 = {"schema_version": 1, "source_id": "signed:kaggle", "run_id": run_id,
+          "environment": environments.pop() if len(environments) == 1 else None,
+          "trace_status": "PARTIAL", "reported_final": bool(batches[3]), "expected_spans": None,
+          "expected_units": expected_units, "expectation_origin": "owned_run" if expected_units is not None else None,
+          "span_count": len(spans), "trace_count": len({s["trace_id"] for s in spans}),
+          "unique_units": len({s["unit_id"] for s in spans if s["unit_id"]}),
+          "worker_count": len({s["attributes"]["aob.worker_id"] for s in spans if s["attributes"].get("aob.worker_id")}),
+          **semantics.graph(spans, set()), **semantics.metrics(spans)}
+    return {"schema_v1": v1, "trace_status": "complete" if batches[3] else ("partial" if spans else "pending"),
             "spans": len(spans), "llm_calls": len(calls), "task_spans": len(tasks),
             "validation_spans": len(validations), "unique_units": len(units), "expected_units": expected_units,
             "task_status_ok": sum(s["status"] == "OK" for s in tasks),

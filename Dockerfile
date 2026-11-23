@@ -25,7 +25,8 @@ COPY workers ./workers
 COPY scaling ./scaling
 COPY orchestration ./orchestration
 COPY adapters ./adapters
-COPY config.py demo_api.py demo_auth.py demo_scaling.py demo_service.py demo_store.py kaggle_launcher.py otlp_api.py otlp_store.py trace_store.py ./
+COPY config.py demo_api.py demo_auth.py demo_scaling.py demo_service.py demo_store.py kaggle_launcher.py otlp_api.py otlp_store.py otlp_semantics.py trace_store.py ./
+RUN python -c "import api.private_app, api.public_ingress, opentelemetry.sdk.trace"
 
 RUN addgroup --system --gid 10001 aob \
     && adduser --system --uid 10001 --ingroup aob aob \

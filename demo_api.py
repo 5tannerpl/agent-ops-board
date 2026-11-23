@@ -283,40 +283,89 @@ def unit_trace(run_id: str, unit_id: str,
     return trace_store.unit_trace(conn, run_id, unit_id)
 
 
-def external_source() -> str:
-    """Keep source selection server-side; dashboard callers use the configured local source."""
-    return config.get_otlp_source_tokens().keys().__iter__().__next__() if config.get_otlp_source_tokens() else ""
+def external_sources(user: dict = Depends(demo_auth.require_demo_access)) -> list[str]:
+    configured = config.get_otlp_read_sources()
+    record = demo_auth.load_allowed_users().get(user["sub"])
+    if not isinstance(record, dict) or record.get("enabled") is not True:
+        raise HTTPException(403, "Demo access denied")
+    if "external_sources" not in record:
+        # Preserve the original single-source dashboard, never implicitly grant multi-tenant access.
+        return configured if len(configured) == 1 else []
+    grants = record["external_sources"]
+    return [s for s in configured if isinstance(grants, list) and s in grants]
+
+
+def external_source(source_id: str | None = None, sources: list[str] = Depends(external_sources)) -> str:
+    if source_id is None:
+        return next(iter(sources), "")
+    if source_id not in sources:
+        raise HTTPException(404, "Source not found")
+    return source_id
+
+
+def external_page(limit: int = Query(1000, ge=1, le=1000), offset: int = Query(0, ge=0)):
+    return {"limit": limit, "offset": offset}
+
+
+def legacy_external_page(limit: int | None = Query(None, ge=1, le=1000), offset: int = Query(0, ge=0)):
+    return {"limit": -1 if limit is None else limit, "offset": offset}
+
+
+@private_router.get("/api/external/sources")
+def list_external_sources(sources: list[str] = Depends(external_sources)):
+    return {"items": [{"source_id": s} for s in sources]}
 
 
 @private_router.get("/api/external/runs")
-def external_runs(user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
-    source_id = external_source()
-    return {"source_id": source_id, "items": otlp_store.list_runs(conn, source_id) if source_id else []}
+def external_runs(source_id: str = Depends(external_source), conn=Depends(get_conn), page=Depends(legacy_external_page)):
+    return {"source_id": source_id, "items": otlp_store.list_runs(conn, source_id, **page)}
 
 
 @private_router.get("/api/external/runs/{run_id}/summary")
-def external_run_summary(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
-    source_id = external_source()
+def external_run_summary(run_id: str, source_id: str = Depends(external_source), conn=Depends(get_conn)):
     return otlp_store.summary(conn, source_id, run_id)
 
 
 @private_router.get("/api/external/runs/{run_id}/units")
-def external_units(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
-    return {"items": otlp_store.units(conn, external_source(), run_id)}
+def external_units(run_id: str, source_id: str = Depends(external_source), conn=Depends(get_conn)):
+    return {"items": otlp_store.units(conn, source_id, run_id)}
 
 
 @private_router.get("/api/external/runs/{run_id}/workers")
-def external_workers(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
-    return {"items": otlp_store.workers(conn, external_source(), run_id)}
+def external_workers(run_id: str, source_id: str = Depends(external_source), conn=Depends(get_conn)):
+    return {"items": otlp_store.workers(conn, source_id, run_id)}
 
 
 @private_router.get("/api/external/runs/{run_id}/timeline")
-def external_timeline(run_id: str, user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
-    return {"items": otlp_store.timeline(conn, external_source(), run_id)}
+def external_timeline(run_id: str, trace_id: str | None = None, worker_id: str | None = None,
+                      unit_id: str | None = None, source_id: str = Depends(external_source),
+                      conn=Depends(get_conn), page=Depends(legacy_external_page)):
+    return {"items": otlp_store.timeline(conn, source_id, run_id, trace_id=trace_id, worker_id=worker_id,
+                                         unit_id=unit_id, **page)}
+
+
+@private_router.get("/api/external/runs/{run_id}/traces/{trace_id}/timeline")
+def external_trace_timeline(run_id: str, trace_id: str, worker_id: str | None = None, unit_id: str | None = None,
+                            source_id: str = Depends(external_source), conn=Depends(get_conn), page=Depends(external_page)):
+    return external_timeline(run_id, trace_id, worker_id, unit_id, source_id, conn, page)
+
+
+@private_router.get("/api/external/runs/{run_id}/traces")
+def external_traces(run_id: str, source_id: str = Depends(external_source), conn=Depends(get_conn),
+                    page=Depends(external_page)):
+    return {"items": otlp_store.traces(conn, source_id, run_id, **page)}
+
+
+@private_router.get("/api/external/runs/{run_id}/traces/{trace_id}")
+def external_trace(run_id: str, trace_id: str, source_id: str = Depends(external_source), conn=Depends(get_conn)):
+    items = otlp_store.traces(conn, source_id, run_id, trace_id=trace_id)
+    if not items:
+        raise HTTPException(404, "Trace not found")
+    return {"source_id": source_id, "run_id": run_id, **items[0]}
 
 
 @private_router.get("/api/external/runs/{run_id}/units/{unit_id}/spans")
 def external_unit_spans(run_id: str, unit_id: str,
-                        user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
-    items = [s for s in otlp_store.timeline(conn, external_source(), run_id) if s["unit_id"] == unit_id]
+                        source_id: str = Depends(external_source), conn=Depends(get_conn), page=Depends(legacy_external_page)):
+    items = otlp_store.timeline(conn, source_id, run_id, unit_id=unit_id, **page)
     return {"run_id": run_id, "unit_id": unit_id, "spans": items}

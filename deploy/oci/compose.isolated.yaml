@@ -55,6 +55,7 @@ services:
       AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users.json
       AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
       AOB_DB_PATH: /var/lib/aob/intake.db
+      AOB_OTLP_READ_SOURCES: ${AOB_OTLP_READ_SOURCES:-[]}
       KAGGLE_CONFIG_DIR: /run/secrets
       AOB_KAGGLE_BIN: kaggle
       PYTHONPATH: /app:/app/dashboard

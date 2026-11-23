@@ -2,6 +2,7 @@
 .gitignore
 .github
 .venv
+.venv-lock
 venv
 __pycache__
 *.py[cod]
@@ -14,6 +15,7 @@ runtime
 *.sqlite3
 .env
 .env.*
+deploy/oci/secrets/
 !.env.example
 allowed_users.json
 **/allowed_users.json

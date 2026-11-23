@@ -89,6 +89,7 @@ TRACE_MAX_BATCHES_PER_RUN = 32
 OTLP_MAX_BYTES = int(os.environ.get("AOB_OTLP_MAX_BYTES", str(2 * 1024 * 1024)))
 OTLP_MAX_SPANS = int(os.environ.get("AOB_OTLP_MAX_SPANS", "1000"))
 OTLP_SOURCE_TOKENS = os.environ.get("AOB_OTLP_SOURCE_TOKENS", "")
+OTLP_READ_SOURCES = os.environ.get("AOB_OTLP_READ_SOURCES")
 EVENT_FINALIZATION_GRACE_SECONDS = float(os.environ.get("AOB_EVENT_FINALIZATION_GRACE_SECONDS", "300"))
 
 
@@ -101,8 +102,19 @@ def get_otlp_source_tokens() -> dict[str, str]:
         value = json.loads(raw)
     except ValueError:
         return {}
-    return {str(k): str(v) for k, v in value.items()
-            if isinstance(k, str) and k and isinstance(v, str) and v}
+    if not isinstance(value, dict) or not all(k and isinstance(v, str) and v and v.isascii()
+                                             for k, v in value.items()):
+        return {}
+    return value if len(set(value.values())) == len(value) else {}
+
+
+def get_otlp_read_sources() -> list[str]:
+    if OTLP_READ_SOURCES is None:
+        return list(get_otlp_source_tokens())  # Existing single-process installations.
+    sources = json.loads(OTLP_READ_SOURCES)
+    if not isinstance(sources, list) or not all(isinstance(s, str) and s for s in sources):
+        raise ValueError("AOB_OTLP_READ_SOURCES must be a JSON list of source IDs")
+    return list(dict.fromkeys(sources))
 
 KAGGLE_BIN = os.environ.get("AOB_KAGGLE_BIN", "kaggle")
 KAGGLE_NOTEBOOK_DIR = Path(os.environ.get("AOB_KAGGLE_NOTEBOOK_DIR", ROOT / "kaggle-notebook"))
