@@ -59,6 +59,11 @@ services:
       AOB_KAGGLE_BIN: kaggle
       PYTHONPATH: /app:/app/dashboard
       HOME: /tmp
+      AOB_OTEL_ENABLED: ${AOB_OTEL_ENABLED:-false}
+      AOB_OTEL_COMMIT: ${AOB_OTEL_COMMIT:-}
+      AOB_OTEL_EXPORTER: ${AOB_OTEL_EXPORTER:-console}
+      AOB_OTEL_SERVICE_NAME: ${AOB_OTEL_SERVICE_NAME:-aob-kaggle-agent}
+      AOB_OTEL_ENVIRONMENT: ${AOB_OTEL_ENVIRONMENT:-kaggle-demo}
     secrets:
       - aob_event_secret
       - source: allowed_users
