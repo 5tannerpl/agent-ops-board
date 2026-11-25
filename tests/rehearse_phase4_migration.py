@@ -40,6 +40,9 @@ c.close()
             run(current, after, """
 import demo_store, otlp_store
 c = demo_store.connect()
+from crosscloud.store import SCHEMA
+c.executescript(SCHEMA)
+assert c.execute("SELECT COUNT(*) FROM deployment_bindings").fetchone()[0] == 0
 assert c.execute('pragma integrity_check').fetchone()[0] == 'ok'
 assert c.execute('select count(*) from external_agent_conflicts').fetchone()[0] == 0
 assert all(c.execute(f'select {col} from external_agent_spans').fetchone()[0] is None for col in otlp_store.EXTRA)
