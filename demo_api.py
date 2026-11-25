@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 import config
 import demo_auth
+from crosscloud.policy import source_grants
 import demo_scaling
 import demo_service
 import demo_store as store
@@ -288,11 +289,7 @@ def external_sources(user: dict = Depends(demo_auth.require_demo_access)) -> lis
     record = demo_auth.load_allowed_users().get(user["sub"])
     if not isinstance(record, dict) or record.get("enabled") is not True:
         raise HTTPException(403, "Demo access denied")
-    if "external_sources" not in record:
-        # Preserve the original single-source dashboard, never implicitly grant multi-tenant access.
-        return configured if len(configured) == 1 else []
-    grants = record["external_sources"]
-    return [s for s in configured if isinstance(grants, list) and s in grants]
+    return source_grants(record, configured, legacy_single=True)
 
 
 def external_source(source_id: str | None = None, sources: list[str] = Depends(external_sources)) -> str:
