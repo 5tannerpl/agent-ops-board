@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS operations (
  key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, result TEXT NOT NULL, created_at REAL NOT NULL,
  UNIQUE(owner_id,operation_type,key_hash)
 );
+CREATE TABLE IF NOT EXISTS dispatch_context (
+ run_id TEXT PRIMARY KEY REFERENCES run_dispatch(run_id), snapshot TEXT NOT NULL,
+ traceparent TEXT NOT NULL, claim TEXT, next_check REAL
+);
 COMMIT;
 """
 

@@ -60,6 +60,7 @@ AUTH0_AUDIENCE = os.environ.get("AOB_AUTH0_AUDIENCE", os.environ.get("AUTH0_AUDI
 ALLOWED_USERS_FILE = Path(os.environ.get("AOB_ALLOWED_USERS_FILE", ROOT / "allowed_users.json"))
 DEMO_DB_PATH = Path(os.environ.get("AOB_DEMO_DB_PATH", RUNTIME_DIR / "demo.db"))
 CROSS_CLOUD_ENABLED = os.environ.get("AOB_CROSS_CLOUD_ENABLED", "false").lower() == "true"
+REMOTE_RUNS_ENABLED = os.environ.get("AOB_REMOTE_RUNS_ENABLED", "false").lower() == "true"
 
 # Kaggle -> FastAPI events. Each run gets its own signing key derived from this secret.
 # The environment variable remains useful for local development; production mounts the

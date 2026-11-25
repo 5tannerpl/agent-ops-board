@@ -13,6 +13,8 @@ import os
 import re
 import subprocess
 import tempfile
+import time
+from contextvars import ContextVar
 import textwrap
 from pathlib import Path
 import logging
@@ -33,6 +35,7 @@ DEMO_MODES = ("light", "high_concurrency")
 SCALING_CELL_MARKER = "# AOB scaling demo bootstrap"
 _CHECKOUT_GUARD = 'if "aob_trace_checkout" in globals():\n    aob_trace_checkout(REPO_DIR, REPO_URL)\nelse:\n'
 log = logging.getLogger("kaggle_launcher")
+dispatch_deadline = ContextVar("kaggle_dispatch_deadline", default=None)
 # Matches the raw-body HMAC contract in demo_auth.verify_event().
 PRELUDE_BODY = '''import hashlib, hmac, json, time, urllib.request, uuid
 
@@ -430,6 +433,11 @@ def render_prelude(run_id: str, mode: str = "light", units: int | None = None, k
 
 
 def _run_kaggle(args: list[str], timeout: float) -> subprocess.CompletedProcess:
+    deadline = dispatch_deadline.get()
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.time())
+        if timeout <= 0:
+            raise LaunchError("Kaggle dispatch deadline expired")
     try:
         return subprocess.run([config.KAGGLE_BIN, *args], capture_output=True,
                               text=True, timeout=timeout, encoding="utf-8", errors="replace")

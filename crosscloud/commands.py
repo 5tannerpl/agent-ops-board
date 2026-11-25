@@ -30,9 +30,14 @@ def scoped_binding(conn, principal, run_id):
 
 
 class RunCommandService:
-    def start(self, conn, principal, deployment_id):
-        check_run_capability(principal, scoped_deployment(conn, principal, deployment_id))
-        raise ServiceError(409, "NOT_SUPPORTED")  # no dispatch adapters in 4.2A
+    def start(self, conn, principal, deployment_id, *, spec=None, key=None, traceparent=None):
+        from .dispatch import reserve
+
+        deployment = scoped_deployment(conn, principal, deployment_id)
+        check_run_capability(principal, deployment)
+        if deployment["provider"] not in ("azure", "kaggle"):
+            raise ServiceError(409, "NOT_SUPPORTED")
+        return reserve(conn, principal, deployment, spec, key, traceparent)
 
     def bind(self, conn, principal, spec: BindingSpec, key):
         principal.require("aob:runs:write")

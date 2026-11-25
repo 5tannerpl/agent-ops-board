@@ -12,8 +12,12 @@ class KaggleAgentRunClient:
             run = demo_store.get_run(conn, run_id)
             if not run or run["status"] != "submitting":
                 return {"state": "uncertain", "business_status": "unknown"}
-            kaggle_launcher.submit(run_id, run["mode"] or "light", run["units"],
-                                   int(run["event_key_version"] or 1))
+            token = kaggle_launcher.dispatch_deadline.set(context.get("deadline"))
+            try:
+                kaggle_launcher.submit(run_id, run["mode"] or "light", run["units"],
+                                       int(run["event_key_version"] or 1))
+            finally:
+                kaggle_launcher.dispatch_deadline.reset(token)
             demo_store.advance(conn, run_id, "queued")
         return {"state": "accepted", "business_status": "running"}
 

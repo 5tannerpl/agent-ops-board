@@ -105,26 +105,39 @@ def create_run(conn, owner_sub: str, mode: str = "light", units: int | None = No
     """Atomically enforce one global active run plus per-user cooldown and daily cap."""
     now = db.now()
     with db.tx(conn):
-        active = active_runs(conn)
-        if active:
-            raise Conflict(active[0]["run_id"])
-        last = conn.execute("SELECT MAX(created_at) FROM demo_runs WHERE owner_sub=?", (owner_sub,)).fetchone()[0]
-        if last is not None and now - last < config.DEMO_MIN_INTERVAL_SECONDS:
-            raise RateLimited("Please wait before starting another demo.",
-                              config.DEMO_MIN_INTERVAL_SECONDS - (now - last))
-        today = conn.execute("SELECT COUNT(*) FROM demo_runs WHERE owner_sub=? AND created_at>?",
-                             (owner_sub, now - 86400)).fetchone()[0]
-        if today >= config.DEMO_MAX_RUNS_PER_DAY:
-            raise RateLimited("Daily demo limit reached.", 3600)
-        run_id = f"run-{secrets.token_hex(8)}"
-        expires_at = now + config.DEMO_MAX_RUN_SECONDS + config.EVENT_FINALIZATION_GRACE_SECONDS
-        conn.execute(
-            "INSERT INTO demo_runs("
-            "run_id, owner_sub, status, created_at, updated_at, mode, units, event_key_version, event_expires_at"
-            ") VALUES(?, ?, 'submitting', ?, ?, ?, ?, ?, ?)",
-            (run_id, owner_sub, now, now, mode, units, config.EVENT_KEY_VERSION, expires_at),
-        )
+        run_id = reserve_run(conn, owner_sub, mode, units, now)
     return get_run(conn, run_id)
+
+
+def check_dispatch_slot(conn):
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_dispatch'").fetchone():
+        row = conn.execute("SELECT run_id FROM run_dispatch WHERE state!='terminal' LIMIT 1").fetchone()
+        if row:
+            raise Conflict(row["run_id"])
+
+
+def reserve_run(conn, owner_sub, mode, units, now):
+    """Reserve inside the caller's admission transaction, including legacy callers."""
+    assert conn.in_transaction
+    check_dispatch_slot(conn)
+    active = active_runs(conn)
+    if active:
+        raise Conflict(active[0]["run_id"])
+    last = conn.execute("SELECT MAX(created_at) FROM demo_runs WHERE owner_sub=?", (owner_sub,)).fetchone()[0]
+    if last is not None and now - last < config.DEMO_MIN_INTERVAL_SECONDS:
+        raise RateLimited("Please wait before starting another demo.", config.DEMO_MIN_INTERVAL_SECONDS - (now - last))
+    today = conn.execute("SELECT COUNT(*) FROM demo_runs WHERE owner_sub=? AND created_at>?",
+                         (owner_sub, now - 86400)).fetchone()[0]
+    if today >= config.DEMO_MAX_RUNS_PER_DAY:
+        raise RateLimited("Daily demo limit reached.", 3600)
+    run_id = f"run-{secrets.token_hex(8)}"
+    expires_at = now + config.DEMO_MAX_RUN_SECONDS + config.EVENT_FINALIZATION_GRACE_SECONDS
+    conn.execute(
+        "INSERT INTO demo_runs("
+        "run_id, owner_sub, status, created_at, updated_at, mode, units, event_key_version, event_expires_at"
+        ") VALUES(?, ?, 'submitting', ?, ?, ?, ?, ?, ?)",
+        (run_id, owner_sub, now, now, mode, units, config.EVENT_KEY_VERSION, expires_at))
+    return run_id
 
 
 def advance(conn, run_id: str, status: str) -> None:
