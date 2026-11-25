@@ -53,7 +53,7 @@ class RunCommandService:
             cursor = conn.execute(
                 "INSERT INTO deployment_bindings(run_id,owner_id,source_id,remote_run_id,agent_deployment_id,"
                 "agent_version,inference_deployment_id,inference_version,workload_version,deadline,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_id,remote_run_id) DO NOTHING",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner_id,source_id,remote_run_id) DO NOTHING",
                 (run_id, principal.owner, spec.source_id, spec.remote_run_id, spec.agent_deployment_id,
                  versions["agent"], spec.inference_deployment_id, versions.get("inference"),
                  spec.workload_version, spec.deadline, db.now()))

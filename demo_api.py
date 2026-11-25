@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError
 import config
 import demo_auth
 from crosscloud.policy import source_grants
+from crosscloud.history import owned_history
 import demo_scaling
 import demo_service
 import demo_store as store
@@ -61,8 +62,8 @@ def _validation_status(payload) -> str | None:
 
 
 def owned_run(conn, run_id: str, user: dict) -> dict:
-    run = store.get_run(conn, run_id) if store.RUN_ID_RE.match(run_id) else None
-    if run is None or run["owner_sub"] != user["sub"]:
+    run = owned_history(conn, user["sub"], run_id) if store.RUN_ID_RE.match(run_id) else None
+    if run is None:
         raise HTTPException(404, "run not found")
     return demo_service.sync_run(conn, run)
 

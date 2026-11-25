@@ -1,8 +1,8 @@
 """Stored evidence for explicitly bound runs; no provider dependencies on the read path."""
-import json
 from contextlib import closing
 
 import otlp_semantics
+from .history import owned_history
 from .commands import scoped_binding
 from .policy import ServiceError, page
 from .store import digest, reader
@@ -15,11 +15,19 @@ class RunQueryService:
         with closing(reader()) as conn:
             return [dict(row) for row in conn.execute(
                 f"SELECT run_id,source_id,business_status,telemetry_status,created_at FROM deployment_bindings "
-                f"WHERE {where} ORDER BY created_at DESC,run_id LIMIT ? OFFSET ?", [*args, *page(limit, offset)])]
+                f"WHERE {where} UNION ALL SELECT run_id,NULL,status,'unknown',created_at FROM demo_runs "
+                "WHERE owner_sub=? ORDER BY created_at DESC,run_id LIMIT ? OFFSET ?",
+                [*args, principal.owner, *page(limit, offset)])]
 
     def get_run_summary(self, principal, run_id):
         principal.require("aob:runs:read")
         with closing(reader()) as conn:
+            if run_id.startswith("run-"):
+                legacy = owned_history(conn, principal.owner, run_id)
+                if legacy is None:
+                    raise ServiceError(404, "NOT_FOUND")
+                return {"run_id": legacy["run_id"], "business_status": legacy["status"],
+                        "telemetry_status": "unknown", "created_at": legacy["created_at"]}
             return scoped_binding(conn, principal, run_id)
 
     def get_run_trace(self, principal, run_id, limit=50, offset=0):
@@ -36,14 +44,26 @@ class RunQueryService:
         # Fail explicitly rather than aggregate a truncated run as if it were complete.
         with closing(reader()) as conn:
             run = scoped_binding(conn, principal, run_id)
-            rows = conn.execute("SELECT unit_id,span_name,attributes FROM external_agent_spans "
-                                "WHERE source_id=? AND run_id=? LIMIT 2001", (run["source_id"], run["remote_run_id"]))
+            # Only project the fields used by the shared outcome/usage rules, never raw bodies.
+            rows = conn.execute("""
+                SELECT unit_id,span_name,
+                    json_extract(attributes,'$."aob.attempt"') AS attempt,
+                    json_extract(attributes,'$."aob.task.status"') AS task_status,
+                    json_extract(attributes,'$."gen_ai.operation.name"') AS operation,
+                    json_extract(attributes,'$."gen_ai.usage.input_tokens"') AS input_tokens,
+                    json_extract(attributes,'$."gen_ai.usage.output_tokens"') AS output_tokens
+                FROM external_agent_spans WHERE source_id=? AND run_id=? LIMIT 2001
+                """, (run["source_id"], run["remote_run_id"]))
             spans = []
             for row in rows:
                 if len(spans) == 2000:
                     raise ServiceError(413, "EVIDENCE_LIMIT")
-                span = dict(row)
-                span["attributes"] = json.loads(span["attributes"])
+                attrs = {"aob.attempt": row["attempt"], "gen_ai.operation.name": row["operation"],
+                         "gen_ai.usage.input_tokens": row["input_tokens"],
+                         "gen_ai.usage.output_tokens": row["output_tokens"]}
+                if row["task_status"] is not None:
+                    attrs["aob.task.status"] = row["task_status"]
+                span = {"unit_id": row["unit_id"], "span_name": row["span_name"], "attributes": attrs}
                 span["role"] = otlp_semantics.role(span)
                 spans.append(span)
             return spans

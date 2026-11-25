@@ -27,9 +27,14 @@ CREATE TABLE IF NOT EXISTS deployment_bindings (
  inference_deployment_id TEXT, inference_version INTEGER, workload_version TEXT NOT NULL,
  deadline REAL NOT NULL, cancel_requested INTEGER NOT NULL DEFAULT 0,
  business_status TEXT NOT NULL DEFAULT 'unknown', telemetry_status TEXT NOT NULL DEFAULT 'unknown',
- created_at REAL NOT NULL, UNIQUE(source_id,remote_run_id)
+ created_at REAL NOT NULL, UNIQUE(owner_id,source_id,remote_run_id)
 );
 CREATE INDEX IF NOT EXISTS ix_bindings_owner ON deployment_bindings(owner_id,source_id,created_at);
+-- Reserved for outbound starts. Observed external runs have no dispatch and are never queued.
+CREATE TABLE IF NOT EXISTS run_dispatch (
+ run_id TEXT PRIMARY KEY REFERENCES deployment_bindings(run_id), state TEXT NOT NULL DEFAULT 'reserved',
+ attempts INTEGER NOT NULL DEFAULT 0, last_error_code TEXT, updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS operations (
  operation_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, operation_type TEXT NOT NULL,
  key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, result TEXT NOT NULL, created_at REAL NOT NULL,
