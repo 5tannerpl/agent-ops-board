@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 import api_client
+import azure_run
 import config
 import live_demo
 import ui
@@ -12,6 +13,7 @@ import ui
 token = ui.page_header("Agent Ops Board")
 ui.inject_area_css()
 if token:
+    azure_run.render(token)
     live_demo.render(token)
 if config.AOB_ENV == "production":
     st.info("Phase 1 production mode: only the private live demo panel is available.")

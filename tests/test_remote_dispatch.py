@@ -143,6 +143,83 @@ def test_reserved_deadline_blocks_first_send(setup, monkeypatch):
     assert api.get(path, headers=headers).json()["dispatch"]["state"] == "terminal"
 
 
+def test_parked_azure_observation_is_get_only_and_never_releases(setup, monkeypatch):
+    from crosscloud.reconcile import observe
+    api, register, grants, headers = setup
+    body = register()
+    local = api.post(URL, json=body, headers=headers).json()["run_id"]
+    with pytest.raises(ServiceError, match="NOT_UNCERTAIN"):
+        observe(local)
+    class Lost:
+        def start_run(self, ctx):
+            return dispatch.uncertain("REMOTE_TIMEOUT")
+    monkeypatch.setattr(resolution, "resolve", lambda *args: Lost())
+    assert dispatch.step()
+    with closing(store.writer()) as conn:
+        conn.execute("UPDATE deployment_bindings SET deadline=0")
+    due()
+    assert dispatch.step() and not dispatch.step()
+    gets = []
+    class StatusOnly:
+        def get_status(self, remote):
+            gets.append(remote)
+            return {"state": "terminal", "business_status": "complete"}
+    monkeypatch.setattr(resolution, "resolve", lambda *args: StatusOnly())
+    path = URL + "/" + local
+    before = api.get(path, headers=headers).json()
+    assert observe(local)["observation"]["business_status"] == "complete"
+    assert before == api.get(path, headers=headers).json()
+    assert api.post(URL, json=body, headers={**headers, "Idempotency-Key": "again"}).status_code == 409
+    grants["external_sources"] = []
+    with pytest.raises(ServiceError, match="NOT_FOUND"):
+        observe(local)
+    assert gets == [before["remote_run_id"]]
+
+
+def test_worker_singleton_and_term_drain(setup, tmp_path):
+    api, register, grants, headers = setup
+    local = api.post(URL, json=register(), headers=headers).json()["run_id"]
+    policy = tmp_path / "allow"
+    policy.write_text(json.dumps({"allowed_users": {"alice": grants}}))
+    child_env = dict(os.environ, AOB_ALLOWED_USERS_FILE=str(policy), AOB_OTLP_READ_SOURCES='["east"]',
+                     AOB_CROSS_CLOUD_ENABLED="true", AOB_REMOTE_RUNS_ENABLED="true",
+                     AOB_DEMO_DB_PATH=str(config.DEMO_DB_PATH))
+    # Hold a fake POST open until the test sends TERM. No provider connectivity.
+    program = """
+import sys,time,pathlib
+from crosscloud import resolution,worker
+class Fake:
+    def start_run(self, ctx):
+        release = pathlib.Path(sys.argv[1])
+        release.with_suffix('.started').touch()
+        end = time.monotonic()+15
+        while not release.exists() and time.monotonic()<end: time.sleep(.02)
+        assert release.exists()
+        return {'state':'accepted','business_status':'running'}
+resolution.resolve=lambda *a: Fake()
+worker.main()
+"""
+    release = tmp_path / "release"
+    proc = subprocess.Popen([sys.executable, "-c", program, str(release)], env=child_env)
+    try:
+        end = time.monotonic() + 10
+        while not release.with_suffix(".started").exists():
+            assert proc.poll() is None and time.monotonic() < end
+            time.sleep(.02)
+        second = subprocess.run([sys.executable, "-m", "crosscloud.worker"], env=child_env,
+                                capture_output=True, timeout=5)
+        assert second.returncode != 0 and b"already running" in second.stderr
+        proc.terminate()
+        release.touch()
+        assert proc.wait(5) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    run = api.get(URL + "/" + local, headers=headers).json()
+    assert (run["dispatch"]["state"], run["dispatch"]["attempts"]) == ("accepted", 1)
+
+
 def test_kaggle_durable_path_shares_callbacks_and_admission(setup, demo):
     api, register, _, headers = setup
     body = register("kaggle")

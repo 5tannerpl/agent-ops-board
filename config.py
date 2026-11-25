@@ -97,7 +97,14 @@ EVENT_FINALIZATION_GRACE_SECONDS = float(os.environ.get("AOB_EVENT_FINALIZATION_
 
 def get_otlp_source_tokens() -> dict[str, str]:
     """Return source_id -> bearer token mappings, never accepting source identity from the client."""
-    raw = OTLP_SOURCE_TOKENS.strip()
+    path = os.getenv("AOB_OTLP_SOURCE_TOKENS_FILE")
+    if path:
+        try:
+            raw = Path(path).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            return {}  # Never fall back to an ambient token when a mount is configured.
+    else:
+        raw = OTLP_SOURCE_TOKENS.strip()
     if not raw:
         return {}
     try:

@@ -1,0 +1,113 @@
+# Standalone (not an overlay). Never reuse the isolated production project or volume.
+name: aob-crosscloud-staging
+x-service: &service
+  image: ${AOB_STAGING_IMAGE:?set reviewed staging image}
+  pull_policy: never
+  user: "10001:10001"
+  restart: "on-failure:3"
+  security_opt: [no-new-privileges:true]
+  cpus: 1
+  mem_limit: 768m
+  pids_limit: 128
+x-flags: &flags
+  AOB_CROSS_CLOUD_ENABLED: ${AOB_CROSS_CLOUD_ENABLED:-false}
+  AOB_REMOTE_RUNS_ENABLED: ${AOB_REMOTE_RUNS_ENABLED:-false}
+  AOB_AZURE_RUN_DEPLOYMENT_ID: ${AOB_AZURE_RUN_DEPLOYMENT_ID:-}
+x-target: &target
+  <<: *flags
+  AOB_AZURE_RUN_HOST: ${AOB_AZURE_RUN_HOST:-}
+  AOB_AZURE_RUN_IPV4: ${AOB_AZURE_RUN_IPV4:-}
+  AOB_OTLP_READ_SOURCES: ${AOB_OTLP_READ_SOURCES:-[]}
+  AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users
+  AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
+  AOB_ENV: staging
+x-api: &api
+  AOB_ENV: staging
+  AOB_AUTH0_DOMAIN: ${AOB_AUTH0_DOMAIN:?set staging domain}
+  AOB_AUTH0_AUDIENCE: ${AOB_AUTH0_AUDIENCE:?set staging audience}
+  AOB_EVENTS_URL: http://event-ingress:8011/api/events
+  AOB_EVENT_SECRET_FILE: /run/secrets/event_secret
+  AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users
+  AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
+
+services:
+  control-api:
+    <<: *service
+    command: [uvicorn, api.private_app:app, --host, 0.0.0.0, --port, "8010"]
+    environment:
+      <<: [*api, *target]
+      AOB_DB_PATH: /var/lib/aob/intake.db
+    secrets: [allowed_users, event_secret]
+    volumes: [data:/var/lib/aob]
+    networks: [control, auth-egress]
+    ports: ["127.0.0.1:${AOB_STAGE_CONTROL_PORT:-28010}:8010"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz',timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    <<: *service
+    mem_limit: 1536m
+    command: [streamlit, run, dashboard/app.py, --server.address=0.0.0.0, --server.port=8501, --server.headless=true]
+    environment:
+      <<: *flags
+      # Use the authenticated, live-demo-only dashboard (not local development controls).
+      AOB_ENV: production
+      AOB_API_URL: http://control-api:8010
+      PYTHONPATH: /app:/app/dashboard
+    secrets:
+      - source: streamlit_config
+        target: /app/.streamlit/secrets.toml
+    networks: [control, auth-egress]
+    ports: ["127.0.0.1:${AOB_STAGE_DASH_PORT:-28501}:8501"]
+    depends_on:
+      control-api: {condition: service_healthy}
+
+  event-ingress:
+    <<: *service
+    command: [uvicorn, api.public_ingress:app, --host, 0.0.0.0, --port, "8011"]
+    environment:
+      <<: *api
+      AOB_OTLP_SOURCE_TOKENS_FILE: /run/secrets/otlp_tokens
+    secrets: [allowed_users, event_secret, otlp_tokens]
+    volumes: [data:/var/lib/aob]
+    networks: [edge]
+    ports: ["127.0.0.1:${AOB_STAGE_INGRESS_PORT:-28011}:8011"]
+
+  run-dispatcher:
+    <<: *service
+    profiles: [dispatch]
+    command: [python, -m, crosscloud.worker]
+    environment:
+      <<: *target
+      AOB_AZURE_RUN_TOKEN_FILE: /run/secrets/azure_run_token
+    secrets: [allowed_users, azure_run_token]
+    networks: [dispatch-egress]
+    volumes: [data:/var/lib/aob]
+    read_only: true
+    cap_drop: [ALL]
+    stop_grace_period: 100s
+    mem_limit: 384m
+    depends_on:
+      control-api: {condition: service_healthy}
+
+volumes:
+  data: {}
+networks:
+  control: {internal: true}
+  edge: {}
+  auth-egress: {}
+  dispatch-egress: {}
+secrets:
+  allowed_users:
+    file: ${AOB_STAGING_SECRETS_DIR:?set staging-only directory}/allowed_users.json
+  event_secret:
+    file: ${AOB_STAGING_SECRETS_DIR}/event-secret
+  azure_run_token:
+    file: ${AOB_STAGING_SECRETS_DIR}/azure-run-token
+  otlp_tokens:
+    file: ${AOB_STAGING_SECRETS_DIR}/otlp-tokens.json
+  streamlit_config:
+    file: ${AOB_STAGING_SECRETS_DIR}/streamlit-secrets.toml

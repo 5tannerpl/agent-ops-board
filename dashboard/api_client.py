@@ -88,6 +88,17 @@ def demo_runs(token: str) -> list[dict]:
     return _request("GET", "/api/demo/runs", **_bearer(token))["items"]
 
 
+def azure_start(token: str, deployment: str, key: str) -> dict:
+    headers = {**_bearer(token)["headers"], "Idempotency-Key": key}
+    return _request("POST", "/api/v1/runs", headers=headers,
+                    json={"agent_deployment_id": deployment, "workload_version": "synthetic-intake-v1",
+                          "deadline_seconds": 120})
+
+
+def stored_run(token: str, run_id: str) -> dict:
+    return _request("GET", f"/api/v1/runs/{run_id}", **_bearer(token))
+
+
 def demo_status(token: str, run_id: str) -> dict:
     return _request("GET", f"/api/demo/{run_id}/status", **_bearer(token))
 

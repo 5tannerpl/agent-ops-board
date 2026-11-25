@@ -77,6 +77,19 @@ def reserve(conn, principal, deployment, spec, key, traceparent):
     return store.record_once(conn, principal, "start", key, spec.model_dump(), insert)
 
 
+def authorized_deployment(row, snapshot):
+    owner = row["owner_id"]
+    p = Principal.from_verified({"sub": owner, "scope": "aob:runs:execute"},
+                                demo_auth.load_allowed_users().get(owner), config.get_otlp_read_sources())
+    p.source(row["source_id"])
+    with closing(store.reader()) as conn:
+        current = scoped_deployment(conn, p, row["agent_deployment_id"])
+    check_run_capability(p, current)
+    if current != snapshot["deployment"]:
+        raise ServiceError(403, "TARGET_CHANGED")
+    return current
+
+
 def step():
     """Claim the only send right, or lease a GET. A lost send right never permits another POST."""
     enabled()
@@ -99,15 +112,7 @@ def step():
     # This boundary intentionally catches only classified configuration/launcher errors.
     # A worker crash leaves a durable dispatching record; recovery may only GET.
     try:
-        owner = row["owner_id"]
-        p = Principal.from_verified({"sub": owner, "scope": "aob:runs:execute"},
-                                    demo_auth.load_allowed_users().get(owner), config.get_otlp_read_sources())
-        p.source(row["source_id"])
-        with closing(store.reader()) as conn:
-            current = scoped_deployment(conn, p, row["agent_deployment_id"])
-        check_run_capability(p, current)
-        if current != snapshot["deployment"]:
-            raise ServiceError(403, "TARGET_CHANGED")
+        current = authorized_deployment(row, snapshot)
         if row["deadline"] <= db.now() or row["cancel_requested"]:
             raise ServiceError(409, "DEADLINE_EXPIRED" if not row["cancel_requested"] else "CANCEL_REQUESTED")
         client = resolution.resolve(current, snapshot["target"], row["deadline"])

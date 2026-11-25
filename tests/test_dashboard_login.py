@@ -43,3 +43,31 @@ def test_whitelisted_user_sees_the_page(gated):
     at = gated({"is_logged_in": True, "tokens": {"access": "t"}, "name": "Alice"})
     assert not at.error
     assert "No workers registered yet." in [i.value for i in at.info]
+
+
+def test_azure_panel_reuses_lost_receipt_key_then_only_reads(monkeypatch):
+    import config
+    calls = []
+    def private(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if len(calls) == 1:
+            raise api_client.ApiError("receipt lost")
+        if method == "POST":
+            return {"run_id": "local"}
+        return {"dispatch": {"state": "uncertain"}, "business_status": "unknown",
+                "telemetry_status": "unknown", "remote_run_id": "remote"}
+
+    monkeypatch.setattr(api_client, "_request", private)
+    monkeypatch.setattr(config, "CROSS_CLOUD_ENABLED", True)
+    monkeypatch.setenv("AOB_AZURE_RUN_DEPLOYMENT_ID", "approved")
+    at = AppTest.from_string('import azure_run; azure_run.render("user-token")').run()
+    assert not at.button and not calls and not at.exception
+    monkeypatch.setattr(config, "REMOTE_RUNS_ENABLED", True)
+    at.run().button[0].click().run()
+    at.button[0].click().run()
+    at.run()
+    assert not at.exception and not at.button and at.session_state["azure_local_run"] == "local"
+    assert calls[0] == calls[1] and calls[0][:2] == ("POST", "/api/v1/runs")
+    assert calls[0][2]["json"]["agent_deployment_id"] == "approved"
+    assert calls[0][2]["headers"]["Idempotency-Key"]
+    assert calls[2:] and all(c[:2] == ("GET", "/api/v1/runs/local") for c in calls[2:])
