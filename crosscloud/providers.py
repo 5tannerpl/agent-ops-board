@@ -1,4 +1,4 @@
-"""Independent structural contracts. No adapters are installed in the control plane."""
+"""Independent structural contracts; cancellation is optional, never inferred."""
 from typing import Protocol
 
 from .policy import ServiceError

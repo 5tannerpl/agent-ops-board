@@ -27,7 +27,7 @@ def approved_target(deployment):
     except ValueError:
         raise ServiceError(503, "TARGET_CONFIGURATION") from None
     label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    if (not address.is_global or address.is_multicast or address.is_reserved
+    if (not address.is_global or address.is_multicast or address.is_reserved or str(address) == "168.63.129.16"
             or len(host) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", host)):
         raise ServiceError(503, "TARGET_CONFIGURATION")
     return {"hostname": host, "address": str(address)}
@@ -41,7 +41,10 @@ def resolve(deployment, target, deadline):
     try:
         path = Path(os.environ["AOB_AZURE_RUN_TOKEN_FILE"])
         with path.open("rb") as f:
-            token = f.read(4097).rstrip(b"\r\n").decode("ascii")
+            raw = f.read(4099)
+        if len(raw) > 4098:
+            raise ValueError
+        token = raw.rstrip(b"\r\n").decode("ascii")
         if not re.fullmatch(r"[!-~]{32,4096}", token) or token in config.get_otlp_source_tokens().values():
             raise ValueError
     except (OSError, KeyError, ValueError):

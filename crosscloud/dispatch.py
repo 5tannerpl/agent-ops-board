@@ -91,8 +91,9 @@ def step():
         start = row["state"] == "reserved"
         claim, local = uuid4().hex, row["run_id"]
         conn.execute("UPDATE dispatch_context SET claim=?,next_check=? WHERE run_id=?", (claim, now+90, local))
+        claimed_state = "dispatching" if start else "uncertain" if row["state"] == "dispatching" else row["state"]
         conn.execute("UPDATE run_dispatch SET state=?,attempts=attempts+?,updated_at=? WHERE run_id=?",
-                     ("dispatching" if start else "uncertain", int(start), now, local))
+                     (claimed_state, int(start), now, local))
 
     snapshot = json.loads(row["snapshot"])
     # This boundary intentionally catches only classified configuration/launcher errors.

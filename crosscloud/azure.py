@@ -44,7 +44,8 @@ class AzureAgentRunClient:
         except (ValueError, RecursionError):
             return uncertain("INVALID_RESPONSE")
         if status not in (200, 202):
-            if method == "POST" and status in (401, 403, 409, 413, 422, 503):
+            capacity = status == 503 and body == {"detail": "Process run history full"}
+            if method == "POST" and (status in (401, 403, 409, 413, 422) or capacity):
                 return {"state": "terminal", "business_status": "failed", "code": "REMOTE_REJECTED"}
             return uncertain("REMOTE_UNKNOWN" if status == 404 else
                              "REMOTE_TIMEOUT" if status == 504 else "REMOTE_ERROR")
@@ -80,7 +81,7 @@ class AzureAgentRunClient:
             timeout=httpx.Timeout(budget, connect=min(5, budget)),
         ) as client, client.stream(method, "https://" + self.address + path, headers=headers,
                                    extensions={"sni_hostname": self.hostname}, json=body) as response:
-            if response.status_code not in (200, 202):
+            if response.status_code not in (200, 202, 503):
                 return response.status_code, None
             data = bytearray()
             async for chunk in response.aiter_raw():
