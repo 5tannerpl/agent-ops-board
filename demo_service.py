@@ -5,6 +5,7 @@ import config
 import demo_scaling
 import kaggle_launcher
 import demo_store as store
+from crosscloud.kaggle import KaggleAgentRunClient
 from storage import db
 
 log = logging.getLogger("demo")
@@ -57,11 +58,7 @@ def submit_run(run_id: str) -> None:
     """Push to Kaggle (blocking; run in the background). A successful push only means ``queued``."""
     conn = store.connect()
     try:
-        run = store.get_run(conn, run_id) or {}
-        kaggle_launcher.submit(
-            run_id, run.get("mode") or "light", run.get("units"), int(run.get("event_key_version") or 1)
-        )
-        store.advance(conn, run_id, "queued")
+        KaggleAgentRunClient().start_run({"remote_run_id": run_id})
     except kaggle_launcher.LaunchError as exc:
         store.finish(conn, run_id, "failed", str(exc))
     except Exception:
