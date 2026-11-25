@@ -12,15 +12,15 @@ import (
 
 func TestResolve(t *testing.T) {
 	data := []byte("GGUF\x03\x00\x00\x00synthetic bytes, not a model")
-	for _, name := range []string{"local", "cache", "link", "missing", "revision", "checksum", "traversal", "foreign link", "snapshot symlink", "layout", "format", "unsupported quant", "cancel"} {
+	for _, name := range []string{"local", "local revision", "cache", "link", "missing", "revision", "checksum", "traversal", "foreign link", "snapshot symlink", "layout", "format", "unsupported quant", "cancel"} {
 		t.Run(name, func(t *testing.T) {
 			s := modelSpec{t.TempDir(), "cache", "test/example", strings.Repeat("a", 40), "test-Q8_0.gguf", fmt.Sprintf("%x", sha256.Sum256(data))}
 			repo := filepath.Join(s.root, "models--test--example")
 			snap := filepath.Join(repo, "snapshots", s.revision)
 			dir := snap
-			if name == "local" {
+			if strings.HasPrefix(name, "local") {
 				s.mode = "local"
-				dir = s.root
+				dir = filepath.Join(s.root, s.revision)
 			}
 			if err := os.MkdirAll(dir, 0700); err != nil {
 				t.Fatal(err)
@@ -62,7 +62,7 @@ func TestResolve(t *testing.T) {
 			switch name {
 			case "layout":
 				s.repo = "another/repo"
-			case "revision":
+			case "revision", "local revision":
 				s.revision = strings.Repeat("b", 40)
 			case "checksum":
 				s.digest = strings.Repeat("0", 64)

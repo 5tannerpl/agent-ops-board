@@ -55,7 +55,12 @@ func resolveModel(ctx context.Context, s modelSpec) (*os.File, error) {
 	dir := root
 	switch s.mode {
 	case "local":
-		// Reviewed local export; its digest, not a local mutable ref, binds its revision.
+		// A local export is staged as <approved root>/<full revision>/<filename>.
+		dir, err = openAt(root, s.revision, true)
+		if err != nil {
+			return nil, err
+		}
+		defer dir.Close()
 	case "cache":
 		repo, err := openAt(root, "models--"+strings.ReplaceAll(s.repo, "/", "--"), true)
 		if err != nil {
