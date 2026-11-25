@@ -28,6 +28,7 @@ type telemetry struct {
 }
 
 type observation struct {
+	VerifiedModel  *verifiedModel    `json:"verified_model,omitempty"`
 	Kind           string            `json:"kind"`
 	At             time.Time         `json:"observed_at"`
 	Worker         string            `json:"inference_worker_instance"`
@@ -51,6 +52,14 @@ type observation struct {
 	SinkFailed     uint64            `json:"sink_failed_total,omitempty"`
 	ReadyEvidence  string            `json:"ready_evidence,omitempty"`
 	ElapsedState   string            `json:"elapsed_state,omitempty"`
+}
+
+// Only constructed after actual content verification, never from request data.
+type verifiedModel struct {
+	Repo     string `json:"repo"`
+	Revision string `json:"revision"`
+	File     string `json:"filename"`
+	SHA256   string `json:"sha256"`
 }
 
 func newTelemetry() *telemetry {

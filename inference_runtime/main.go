@@ -55,7 +55,7 @@ func serve(signals context.Context) error {
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Timeout: time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	probe := func(c context.Context) bool { return llamaHealthy(c, client, privateURL) }
-	health := healthAdapter(l, probe)
+	health := measuredHealth(l, probe, tel)
 	mux := http.NewServeMux()
 	mux.Handle("/ping", health)
 	mux.Handle("/readyz", health)
@@ -93,7 +93,16 @@ func serve(signals context.Context) error {
 		root = runpodHub
 	}
 	spec := modelSpec{root, mode, os.Getenv("MODEL_REPO"), os.Getenv("MODEL_REVISION"), os.Getenv("MODEL_FILENAME"), os.Getenv("MODEL_SHA256")}
-	s := supervisor{func(c context.Context) (*os.File, error) { return resolveModel(c, spec) }, startLlama, probe, l.set, 180 * time.Second, 250 * time.Millisecond}
+	resolve := func(c context.Context) (*os.File, error) {
+		start := time.Now()
+		f, err := resolveModel(c, spec)
+		if err == nil {
+			tel.emit(observation{Kind: "model_verified", Model: modelAlias, DurationMS: time.Since(start).Milliseconds(),
+				VerifiedModel: &verifiedModel{spec.repo, spec.revision, spec.filename, spec.digest}})
+		}
+		return f, err
+	}
+	s := supervisor{resolve, startLlama, probe, l.set, 180 * time.Second, 250 * time.Millisecond}
 	completed := make(chan error, 1)
 	go func() { completed <- s.run(workers) }()
 	// Independent watchdog also bounds a stalled mount read (which context

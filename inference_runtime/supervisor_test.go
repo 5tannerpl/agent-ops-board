@@ -89,7 +89,8 @@ func TestSupervise(t *testing.T) {
 func TestProviderHealth(t *testing.T) {
 	l := &lifecycle{state: "INITIALIZING", since: time.Now()}
 	var healthy bool
-	h := healthAdapter(l, func(context.Context) bool { return healthy })
+	tel := &telemetry{queue: make(chan observation, 2)}
+	h := measuredHealth(l, func(context.Context) bool { return healthy }, tel)
 	check := func(path string, status int) {
 		t.Helper()
 		r := httptest.NewRecorder()
@@ -108,6 +109,10 @@ func TestProviderHealth(t *testing.T) {
 	healthy = true
 	check("/readyz", 200)
 	check("/ping", 200)
+	check("/ping", 200)
+	if len(tel.queue) != 1 || (<-tel.queue).Kind != "observed_ping_204_to_200" {
+		t.Fatal("expected one observed probe transition")
+	}
 	l.set("FAILED")
 	check("/ping", 503)
 	l.set("DRAINING")
