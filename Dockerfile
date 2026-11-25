@@ -16,6 +16,7 @@ RUN python -m pip install --no-cache-dir --requirement requirements.lock
 RUN python -c "from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest, ExportTraceServiceResponse; print('OTLP import OK')"
 
 COPY api ./api
+COPY crosscloud ./crosscloud
 COPY dashboard ./dashboard
 COPY security ./security
 COPY storage ./storage

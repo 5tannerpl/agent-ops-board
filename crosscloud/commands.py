@@ -1,5 +1,4 @@
 """Record observations and local intent. None of these commands dispatch work."""
-from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, FiniteFloat
