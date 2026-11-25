@@ -10,6 +10,9 @@ import demo_auth
 from crosscloud.policy import Principal, ServiceError
 from crosscloud.registry import DeploymentRegistryService, DeploymentSpec
 from crosscloud.store import reader, writer
+from crosscloud.commands import RunCommandService
+from crosscloud.dispatch import StartSpec
+from crosscloud.queries import RunQueryService
 
 
 def principal(claims=Depends(demo_auth.require_user)):
@@ -19,6 +22,20 @@ def principal(claims=Depends(demo_auth.require_user)):
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 registry = DeploymentRegistryService()
+
+
+@app.post("/runs", status_code=202)
+def create_run(spec: StartSpec, key: str = Header(alias="Idempotency-Key"),
+               traceparent: str | None = Header(default=None), user=Depends(principal)):
+    user.require("aob:runs:execute")
+    with closing(writer()) as conn:
+        return RunCommandService().start(conn, user, spec.agent_deployment_id, spec=spec,
+                                         key=key, traceparent=traceparent)
+
+
+@app.get("/runs/{run_id}")
+def get_run(run_id: str, user=Depends(principal)):
+    return RunQueryService().get_run_summary(user, run_id)
 
 
 @app.exception_handler(ServiceError)

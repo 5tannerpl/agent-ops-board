@@ -2,10 +2,13 @@
 from contextlib import closing
 
 import otlp_semantics
-from .history import owned_history
 from .commands import scoped_binding
 from .policy import ServiceError, page
 from .store import digest, reader
+
+
+_UNBOUND_LEGACY = """NOT EXISTS (SELECT 1 FROM run_dispatch d JOIN deployment_bindings b USING(run_id)
+                      WHERE b.remote_run_id=demo_runs.run_id AND b.owner_id=demo_runs.owner_sub)"""
 
 
 class RunQueryService:
@@ -16,19 +19,23 @@ class RunQueryService:
             return [dict(row) for row in conn.execute(
                 f"SELECT run_id,source_id,business_status,telemetry_status,created_at FROM deployment_bindings "
                 f"WHERE {where} UNION ALL SELECT run_id,NULL,status,'unknown',created_at FROM demo_runs "
-                "WHERE owner_sub=? ORDER BY created_at DESC,run_id LIMIT ? OFFSET ?",
+                f"WHERE owner_sub=? AND {_UNBOUND_LEGACY} ORDER BY created_at DESC,run_id LIMIT ? OFFSET ?",
                 [*args, principal.owner, *page(limit, offset)])]
 
     def get_run_summary(self, principal, run_id):
         principal.require("aob:runs:read")
         with closing(reader()) as conn:
             if run_id.startswith("run-"):
-                legacy = owned_history(conn, principal.owner, run_id)
+                legacy = conn.execute(f"SELECT * FROM demo_runs WHERE owner_sub=? AND run_id=? AND {_UNBOUND_LEGACY}",
+                                      (principal.owner, run_id)).fetchone()
                 if legacy is None:
                     raise ServiceError(404, "NOT_FOUND")
                 return {"run_id": legacy["run_id"], "business_status": legacy["status"],
                         "telemetry_status": "unknown", "created_at": legacy["created_at"]}
-            return scoped_binding(conn, principal, run_id)
+            binding = scoped_binding(conn, principal, run_id)
+            dispatch = conn.execute("SELECT state,attempts,last_error_code FROM run_dispatch WHERE run_id=?",
+                                    (run_id,)).fetchone()
+            return {**binding, "dispatch": dict(dispatch) if dispatch else None, "remote_cancel": "NOT_SUPPORTED"}
 
     def get_run_trace(self, principal, run_id, limit=50, offset=0):
         principal.require("aob:traces:read")
