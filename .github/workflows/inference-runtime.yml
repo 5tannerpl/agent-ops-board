@@ -1,0 +1,52 @@
+name: Standalone inference image
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish only with separate operator authorization
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - run: |
+          docker build --platform linux/amd64 -t "aob-inference:$GITHUB_SHA" inference_runtime
+          docker save "aob-inference:$GITHUB_SHA" -o "$RUNNER_TEMP/image.tar"
+          docker run --rm -v "$RUNNER_TEMP/image.tar:/input.tar:ro" \
+            aquasec/trivy@sha256:7228e304ae0f610a1fad937baa463598cadac0c2ac4027cc68f3a8b997115689 \
+            image --input /input.tar --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1
+      - if: inputs.publish
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: scanned-image
+          path: ${{ runner.temp }}/image.tar
+          retention-days: 1
+          compression-level: 0
+  publish:
+    if: inputs.publish && vars.ALLOW_INFERENCE_PUBLICATION == 'true'
+    needs: build
+    environment: inference-image-release
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: scanned-image
+      - name: Push the scanned image, not a rebuild
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker load -i image.tar
+          image="ghcr.io/5tannerpl/aob-llama-serverless:$GITHUB_SHA"
+          docker tag "aob-inference:$GITHUB_SHA" "$image"
+          printf %s "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$image"

@@ -31,6 +31,21 @@ func serveTestChat(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
 }
 func awake() bool { return true }
 
+func TestUpstreamDeadline(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+	}))
+	defer up.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	h := newGateway(awake, up.URL, testKey, nil)
+	w := serveTestChat(h, chatReq(baseInput+`}`).WithContext(ctx))
+	if w.Code != 504 || strings.Contains(w.Body.String(), up.URL) {
+		t.Fatal("expected sanitized upstream timeout", w.Code)
+	}
+}
+
 func TestChatWorkerContract(t *testing.T) {
 	events := &telemetry{queue: make(chan observation, 1)}
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
