@@ -70,7 +70,7 @@ def owned_run(conn, run_id: str, user: dict) -> dict:
 
 @private_router.get("/api/me")
 def me(user: dict = Depends(demo_auth.require_demo_access)):
-    return {"user_id": user["sub"], "can_start_demo": True}
+    return {"user_id": user["sub"], "can_start_demo": config.LEGACY_DEMO_START_ENABLED}
 
 
 class StartIn(BaseModel):
@@ -81,6 +81,8 @@ class StartIn(BaseModel):
 @private_router.post("/api/demo/start", status_code=202)
 def start_demo(background: BackgroundTasks, body: StartIn | None = None,
                user: dict = Depends(demo_auth.require_demo_access), conn=Depends(get_conn)):
+    if not config.LEGACY_DEMO_START_ENABLED:
+        raise HTTPException(403, "Legacy demo start disabled")
     body = body or StartIn()
     if body.mode == "light" and body.units is not None:
         raise HTTPException(422, "units can only be chosen for high_concurrency")

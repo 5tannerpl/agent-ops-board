@@ -1,0 +1,54 @@
+# Apply only AFTER compose.workspace-read.yaml. No new published ports.
+x-target: &target
+  AOB_REMOTE_RUNS_ENABLED: "true"
+  AOB_AZURE_RUN_DEPLOYMENT_ID: ${WORKSPACE_DEPLOYMENT:?set approved existing ID}
+x-azure: &azure
+  <<: *target
+  AOB_AZURE_RUN_HOST: ${WORKSPACE_HOST:?set approved TLS hostname}
+  AOB_AZURE_RUN_IPV4: ${WORKSPACE_IPV4:?set verified public IPv4}
+services:
+  dashboard:
+    environment: *target
+  control-api:
+    environment: *azure
+  event-ingress:
+    environment:
+      AOB_OTLP_SOURCE_TOKENS: ""
+      AOB_OTLP_SOURCE_TOKENS_FILE: /run/secrets/workspace_otlp
+    secrets: [workspace_otlp]
+  run-dispatcher:
+    image: ${WORKSPACE_IMAGE:?set reviewed local ARM64 image}
+    command: [python, -m, crosscloud.worker]
+    profiles: [dispatch]
+    environment:
+      <<: *azure
+      AOB_ENV: production
+      AOB_CROSS_CLOUD_ENABLED: "true"
+      AOB_OTLP_READ_SOURCES: ${WORKSPACE_SOURCES:?set reviewed JSON source catalog}
+      AOB_DEMO_DB_PATH: /var/lib/aob/demo.db
+      AOB_ALLOWED_USERS_FILE: /run/secrets/allowed_users.json
+      AOB_AZURE_RUN_TOKEN_FILE: /run/secrets/workspace_azure
+    secrets:
+      - source: allowed_users
+        target: allowed_users.json
+      - workspace_azure
+    volumes: [aob-isolated-data:/var/lib/aob]
+    networks: [workspace-dispatch-egress]
+    depends_on:
+      control-api: {condition: service_healthy}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "on-failure:3"
+    stop_grace_period: 100s
+    cpus: 1
+    mem_limit: 384m
+    pids_limit: 128
+networks:
+  workspace-dispatch-egress: {}
+secrets:
+  workspace_azure:
+    file: /srv/aob-isolated/secrets/azure-run-token
+  workspace_otlp:
+    file: /srv/aob-isolated/secrets/otlp-tokens.json

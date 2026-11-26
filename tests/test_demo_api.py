@@ -283,3 +283,11 @@ def test_error_code_mapping_is_allowlist_only():
     assert error_code("KAGGLE_SUBMISSION_FAILED") == "KAGGLE_SUBMISSION_FAILED"
     assert error_code("kaggle kernels push failed: boom") == "KAGGLE_SUBMISSION_FAILED"
     assert error_code("sensitive stacktrace with token") == "UNKNOWN_ERROR"
+
+
+def test_read_only_deployment_blocks_legacy_launch(demo, monkeypatch):
+    monkeypatch.setattr(config, "LEGACY_DEMO_START_ENABLED", False)
+    assert demo.get("/api/me", headers=auth()).json()["can_start_demo"] is False
+    assert demo.post("/api/demo/start", headers=auth()).status_code == 403
+    assert demo.get("/api/demo/runs", headers=auth()).json()["items"] == []
+    assert not demo.pushed

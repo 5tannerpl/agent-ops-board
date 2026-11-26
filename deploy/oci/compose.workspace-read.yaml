@@ -1,0 +1,20 @@
+# Last overlay on the existing isolated base + UI release (not standalone).
+services:
+  dashboard:
+    image: ${WORKSPACE_IMAGE:?set reviewed local ARM64 image}
+    environment:
+      AOB_ENV: production
+      AOB_CROSS_CLOUD_ENABLED: "true"
+      AOB_REMOTE_RUNS_ENABLED: "false"
+      AOB_AZURE_RUN_DEPLOYMENT_ID: ""
+  control-api:
+    image: ${WORKSPACE_IMAGE:?set reviewed local ARM64 image}
+    environment:
+      AOB_CROSS_CLOUD_ENABLED: "true"
+      AOB_REMOTE_RUNS_ENABLED: "false"
+      AOB_LEGACY_DEMO_START_ENABLED: "false"
+      AOB_OTLP_READ_SOURCES: ${WORKSPACE_SOURCES:?set reviewed JSON source catalog}
+      AOB_AZURE_RUN_DEPLOYMENT_ID: ""
+      AOB_KAGGLE_RUN_DEPLOYMENT_ID: ""
+  event-ingress:
+    image: ${WORKSPACE_IMAGE:?set reviewed local ARM64 image}
