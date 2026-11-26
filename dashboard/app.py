@@ -10,13 +10,17 @@ import config
 import live_demo
 import ui
 
+if config.CROSS_CLOUD_ENABLED:
+    import workspace
+    workspace.render()
+    st.stop()
+
 token = ui.page_header("Agent Ops Board")
 ui.inject_area_css()
 if token:
     azure_run.render(token)
     live_demo.render(token)
 if config.AOB_ENV == "production":
-    st.info("Phase 1 production mode: only the private live demo panel is available.")
     st.stop()
 
 STATUSES = ["PENDING", "RUNNING", "WAITING_RETRY", "COMPLETED", "FAILED", "MANUAL_REVIEW"]

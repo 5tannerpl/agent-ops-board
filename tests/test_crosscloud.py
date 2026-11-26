@@ -151,6 +151,12 @@ def test_scoped_bindings_and_side_effect_free_history(database, monkeypatch):
 
     east, west = runs
     restricted = replace(ALICE, sources=frozenset({"east"}))
+    assert QUERY.received_spans(restricted) == 1
+    assert QUERY.received_spans(ALICE) == 2
+    assert QUERY.observation(ALICE, east, "timeline", 10, 0)["items"][0]["span_id"] == "1"*16
+    assert QUERY.observation(ALICE, west, "timeline", 10, 0)["items"][0]["span_id"] == "2"*16
+    with pytest.raises(ServiceError, match="NOT_FOUND"):
+        QUERY.observation(restricted, west, "summary", 10, 0)
     for principal in (restricted, BOB):
         for lookup in (QUERY.get_run_summary, QUERY.get_run_trace, QUERY.get_failed_tasks,
                        QUERY.get_llm_metrics, QUERY.get_gpu_metrics):

@@ -320,11 +320,8 @@ def _external_observability(token: str) -> None:
     st.markdown("#### Unit-level Timeline")
     st.dataframe(pd.DataFrame(units), hide_index=True, width="stretch")
     st.markdown("#### Span Parent-child Tree")
-    st.dataframe(pd.DataFrame([{
-        "Span": s["span_name"], "Unit": s["unit_id"], "Worker": s["worker_id"],
-        "Span ID": s["span_id"], "Parent span ID": s["parent_span_id"],
-        "Start": s["start_time"], "Duration (ms)": s["duration_ms"], "Status": s["status"],
-    } for s in spans]), hide_index=True, width="stretch")
+    from trace_table import render as render_trace_table
+    render_trace_table(spans)
 
 
 def render(token: str) -> None:

@@ -53,8 +53,10 @@ services:
     command: [streamlit, run, dashboard/app.py, --server.address=0.0.0.0, --server.port=8501, --server.headless=true]
     environment:
       <<: *flags
-      # Use the authenticated, live-demo-only dashboard (not local development controls).
+      # Keep production authentication restrictions; the label is presentation only.
       AOB_ENV: production
+      AOB_ENVIRONMENT_LABEL: OCI staging
+      STREAMLIT_THEME_BASE: light
       AOB_API_URL: http://control-api:8010
       PYTHONPATH: /app:/app/dashboard
     secrets:

@@ -58,6 +58,33 @@ def due():
         conn.execute("UPDATE dispatch_context SET next_check=0")
 
 
+def test_workspace_history_without_spans_and_scoped_reads(setup):
+    api, register, grants, headers = setup
+    body = register()
+    local = api.post(URL, json=body, headers=headers).json()["run_id"]
+    registry = api.get("/api/v1/deployments?workspace=true", headers=headers).json()["items"][0]
+    assert registry["deployment_id"] == body["agent_deployment_id"]
+    assert not any(key.endswith("_ref") for key in registry)
+    history = api.get(URL, headers=headers, params={"provider": "azure", "deployment": body["agent_deployment_id"],
+                                                   "business": "unknown", "search": local}).json()
+    assert history["total"] == 1 and history["items"][0]["observed_seconds"] is None
+    assert api.get(URL, headers=headers, params={"since": time.time()+1}).json()["total"] == 0
+    assert api.get(URL, headers=headers, params={"offset": 1}).json() == {"items": [], "total": 1}
+    evidence = f"{URL}/{local}/observations/summary"
+    assert api.get(evidence, headers=headers).json()["span_count"] == 0
+    metrics = f"{URL}/{local}/llm-metrics"
+    assert api.get(metrics, headers=headers).json()["observed_calls"] is None
+    assert api.get(metrics, headers=auth("alice", scope="aob:runs:read aob:traces:read")).status_code == 403
+    assert api.get(evidence).status_code == 401
+    assert api.get(evidence, headers=auth("alice", scope="aob:runs:read")).status_code == 403
+    assert api.get(evidence, headers=auth("bob", scope=SCOPES)).status_code == 404
+    assert TestClient(ingress).get(evidence, headers=headers).status_code == 404
+    grants["external_sources"] = []
+    assert api.get(URL, headers=headers).json()["total"] == 0
+    assert api.get(evidence, headers=headers).status_code == 404
+    assert api.get(metrics, headers=headers).status_code == 404
+
+
 def test_admission_replay_revocation_and_history(setup, monkeypatch):
     api, register, grants, headers = setup
     body = register()
@@ -343,6 +370,16 @@ def test_dispatch_to_actual_sample(setup, monkeypatch, tmp_path):
             make = lambda: client(None, {"address":"93.184.216.34", "hostname":"sample.example"}, time.time()+10)
             assert make().get_status(remote)["business_status"] == "complete"
             assert make().get_units(remote) == {"distinct_units":100, "workers":4}
+            binding = api.get(URL, headers=headers, params={"search": remote}).json()["items"][0]
+            assert (binding["run_id"], binding["source_id"], binding["telemetry_status"]) == (local, "east", "unknown")
+            base = f"{URL}/{local}/observations"
+            summary = api.get(base+"/summary", headers=headers).json()
+            assert (summary["run_id"], summary["completed"], summary["failed"], summary["span_count"],
+                    summary["trace_status"]) == (remote, 100, 0, 405, "TRACE_COMPLETE")
+            units = api.get(base+"/units", headers=headers).json()["items"]
+            assert len(units) == 100 and len({u["worker_id"] for u in units}) == 4
+            assert all(u["unit_id"] and u["end_time"] >= u["start_time"] for u in units)
+            assert api.get(f"{URL}/{local}/llm-metrics", headers=headers).json()["observed_calls"] == 0
             with closing(store.reader()) as conn:
                 import otlp_store
                 s = otlp_store.summary(conn, "east", remote)

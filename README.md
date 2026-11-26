@@ -89,7 +89,15 @@ Streamlit cannot route `/workers/{id}`; pages use `/worker_monitor?worker_id=…
 `python -m pytest` (uses the mock model; covers evidence validation, leasing/fencing, crash recovery,
 retries, outbox, load-test fault run and API reads).
 
-## Private live demo (Auth0 + Kaggle GPU batch)
+## Unified cross-cloud workspace
+
+With `AOB_CROSS_CLOUD_ENABLED=true` on the dashboard and private control API, the
+Streamlit entry point opens the eight-page execution, observability and registry
+workspace. Reads require a signed-in, allowlisted operator with the appropriate
+source and JWT grants. Remote execution is a separate, default-off permission.
+See the [UI implementation and staging handoff](docs/Phase_4.2B_UI_Implementation_Report.md).
+
+## Legacy private live demo (Auth0 + Kaggle GPU batch)
 
 Only Auth0 users that an admin created **and** listed in `allowed_users.json` can start the demo. There is no
 public sign-up. Login success, Kaggle submission and event delivery are three independent states:

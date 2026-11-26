@@ -99,6 +99,32 @@ def stored_run(token: str, run_id: str) -> dict:
     return _request("GET", f"/api/v1/runs/{run_id}", **_bearer(token))
 
 
+def deployments(token: str) -> list[dict]:
+    items = []
+    while True:
+        batch = _request("GET", "/api/v1/deployments", params={"workspace": True, "limit": 100, "offset": len(items)},
+                         **_bearer(token))["items"]
+        items.extend(batch)
+        if len(batch) < 100:
+            return [d for d in items if d["provider"].lower() != "kaggle"]
+
+
+def bindings(token: str, **params) -> dict:
+    return _request("GET", "/api/v1/runs", params=params, **_bearer(token))
+
+
+def received_spans(token: str) -> int:
+    return _request("GET", "/api/v1/observations/count", **_bearer(token))["span_count"]
+
+
+def observation(token: str, local: str, section: str, **params) -> dict:
+    return _request("GET", f"/api/v1/runs/{local}/observations/{section}", params=params, **_bearer(token))
+
+
+def bound_llm_metrics(token: str, local: str) -> dict:
+    return _request("GET", f"/api/v1/runs/{local}/llm-metrics", **_bearer(token))
+
+
 def demo_status(token: str, run_id: str) -> dict:
     return _request("GET", f"/api/demo/{run_id}/status", **_bearer(token))
 

@@ -2,6 +2,7 @@
 from contextlib import closing
 
 import otlp_semantics
+import otlp_store
 from .commands import scoped_binding
 from .policy import ServiceError, page
 from .store import digest, reader
@@ -12,6 +13,69 @@ _UNBOUND_LEGACY = """NOT EXISTS (SELECT 1 FROM run_dispatch d JOIN deployment_bi
 
 
 class RunQueryService:
+    def bindings(self, principal, *, limit, offset, search="", provider="", business="", since=None,
+                 until=None, deployment=""):
+        principal.require("aob:runs:read")
+        bounds = page(limit, offset)
+        where, args = principal.predicate()
+        # Deployments are immutable identities. A source-less agent can accept a scoped binding.
+        tables = (f" FROM (SELECT * FROM deployment_bindings WHERE {where}) b JOIN deployments d ON "
+                  "d.deployment_id=b.agent_deployment_id AND d.owner_id=b.owner_id AND "
+                  "(d.source_id IS NULL OR d.source_id=b.source_id) WHERE lower(d.provider)!='kaggle'")
+        for value, condition in ((search, "(instr(b.run_id,?) OR instr(b.remote_run_id,?))"),
+                                 (provider, "d.provider=?"), (business, "b.business_status=?"),
+                                 (deployment, "d.deployment_id=?"), (since, "b.created_at>=?"),
+                                 (until, "b.created_at<?")):
+            if value not in ("", None):
+                tables += " AND " + condition
+                args.extend([value] * condition.count("?"))
+        with closing(reader()) as conn:
+            conn.execute("BEGIN")
+            total = conn.execute("SELECT count(*)" + tables, args).fetchone()[0]
+            duration = ("(SELECT max(end_time)-min(start_time) FROM external_agent_spans s "
+                        "WHERE s.source_id=b.source_id AND s.run_id=b.remote_run_id)"
+                        if "aob:traces:read" in principal.scopes else "NULL")
+            rows = conn.execute("SELECT b.run_id,b.remote_run_id,b.source_id,b.agent_deployment_id,"
+                                "d.provider,b.business_status,b.telemetry_status,b.created_at,b.workload_version,"
+                                + duration + " AS observed_seconds"
+                                + tables + " ORDER BY b.created_at DESC,b.run_id LIMIT ? OFFSET ?", [*args, *bounds])
+            return {"items": list(map(dict, rows)), "total": total}
+
+    def received_spans(self, principal):
+        principal.require("aob:traces:read")
+        sources = sorted(principal.sources)
+        placeholders = ",".join("?" for _ in sources) or "NULL"
+        with closing(reader()) as conn:
+            return conn.execute(f"SELECT count(*) FROM external_agent_spans WHERE source_id IN ({placeholders})",
+                                sources).fetchone()[0]
+
+    def observation(self, principal, local, section, limit, offset, unit=None):
+        principal.require("aob:runs:read")
+        principal.require("aob:traces:read")
+        page(limit, offset)
+        with closing(reader()) as conn:
+            conn.execute("BEGIN")
+            binding = scoped_binding(conn, principal, local)
+            args = conn, binding["source_id"], binding["remote_run_id"]
+            if section != "timeline" and conn.execute(
+                    "SELECT 1 FROM external_agent_spans WHERE source_id=? AND run_id=? LIMIT 1 OFFSET 2000",
+                    args[1:]).fetchone():
+                raise ServiceError(413, "EVIDENCE_LIMIT")
+            if section == "summary":
+                summary = otlp_store.summary(*args)
+                fields = ("source_id", "run_id", "units", "completed", "failed", "span_count", "trace_status",
+                          "expectation_origin", "unknown_outcome_units", "validation_failed", "validation_unknown",
+                          "identity_conflicts", "unresolved_parent_links")
+                return {key: summary[key] for key in fields}
+            if section == "units":
+                return {"items": otlp_store.units(*args)}
+            if section == "workers":
+                return {"items": otlp_store.workers(*args)}
+            spans = otlp_store.timeline(*args, unit_id=unit, limit=limit, offset=offset)
+            fields = ("span_name", "unit_id", "worker_id", "trace_id", "span_id", "parent_span_id",
+                      "start_time", "end_time", "duration_ms", "status")
+            return {"items": [{k: s[k] for k in fields} for s in spans]}
+
     def list_runs(self, principal, limit=50, offset=0):
         principal.require("aob:runs:read")
         where, args = principal.predicate()

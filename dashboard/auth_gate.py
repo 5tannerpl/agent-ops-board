@@ -66,7 +66,7 @@ def require_login() -> str | None:
             _stop_with_logout("error", "This account is not on the demo whitelist.")
         if exc.status == 401:
             _stop_with_logout("warning", "Your session expired or the token is invalid. Log out and sign in again.")
-        _stop_with_logout("error", str(exc))
+        _stop_with_logout("error", f"Account verification unavailable ({exc.status or 'connection error'}).")
     with st.sidebar:
         st.caption(f"Signed in as {st.user.get('name') or st.user.get('email') or 'user'}")
         if st.button("Log out"):

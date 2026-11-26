@@ -13,7 +13,7 @@ def render(token: str):
     if not (config.CROSS_CLOUD_ENABLED and deployment):
         return
     with st.container(border=True):
-        st.subheader("Azure Agent: deterministic 100-task Run")
+        st.subheader("Execution status")
         selected = st.session_state.get("azure_local_run")
         if selected:
             _status(token, selected)
@@ -30,6 +30,7 @@ def render(token: str):
                                "Recover the receipt using the same operation key.")
                     return
                 st.session_state["azure_local_run"] = receipt["run_id"]
+                st.session_state["selected_run"] = receipt["run_id"]
                 del st.session_state["azure_start_key"]
                 st.rerun()
         else:
@@ -43,10 +44,18 @@ def _status(token, local):
     except api_client.ApiError as exc:
         st.warning(f"Stored status unavailable ({exc.status or 'connection error'}).")
         return
-    state = run["dispatch"]["state"]
-    st.write({"Local Run": local, "Remote Run": run["remote_run_id"], "Dispatch": state,
-              "Business outcome": run["business_status"], "Stored binding telemetry": run["telemetry_status"]})
-    st.caption("Remote cancellation is not supported. Check source-scoped OTLP history for trace completeness.")
+    dispatch = run["dispatch"]
+    state = dispatch["state"]
+    st.subheader("Execution lifecycle")
+    st.text(f"Dispatch: {state}   ·   Attempts: {dispatch.get('attempts', 'N/A')}")
+    st.text(f"Business outcome: {run['business_status']}   ·   Stored telemetry: {run['telemetry_status']}")
+    st.text(f"Local Run ID: {local}\nRemote Run ID: {run['remote_run_id']}")
+    if dispatch.get("last_error_code"):
+        st.warning(dispatch["last_error_code"])
+    if run["business_status"] == "complete":
+        st.progress(1.0, text="100 of 100 tasks completed (verified remote response)")
+    else:
+        st.caption("Interim provider task counts are not recorded.")
     if state == "uncertain":
         st.warning("The provider outcome is unknown. The global slot remains occupied; do not start again.")
     if state == "terminal" and config.REMOTE_RUNS_ENABLED and st.button("Prepare another Azure Start"):

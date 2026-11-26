@@ -1,5 +1,6 @@
 """Private registry transport. The sub-application keeps validation errors off legacy routes."""
 from contextlib import closing
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header
 from fastapi.exceptions import RequestValidationError
@@ -38,6 +39,31 @@ def get_run(run_id: str, user=Depends(principal)):
     return RunQueryService().get_run_summary(user, run_id)
 
 
+@app.get("/runs")
+def binding_history(limit: int = 50, offset: int = 0, search: str = "", provider: str = "",
+                    business: str = "", since: float | None = None, until: float | None = None,
+                    deployment: str = "", user=Depends(principal)):
+    return RunQueryService().bindings(user, limit=limit, offset=offset, search=search, provider=provider,
+                                      business=business, since=since, until=until, deployment=deployment)
+
+
+@app.get("/observations/count")
+def span_count(user=Depends(principal)):
+    return {"span_count": RunQueryService().received_spans(user)}
+
+
+@app.get("/runs/{run_id}/observations/{section}")
+def observation(run_id: str, section: Literal["summary", "units", "workers", "timeline"],
+                limit: int = 100, offset: int = 0, unit: str | None = None, user=Depends(principal)):
+    return RunQueryService().observation(user, run_id, section, limit, offset, unit)
+
+
+@app.get("/runs/{run_id}/llm-metrics")
+def llm_metrics(run_id: str, user=Depends(principal)):
+    user.require("aob:runs:read")
+    return RunQueryService().get_llm_metrics(user, run_id)
+
+
 @app.exception_handler(ServiceError)
 async def service_error(request, exc):
     return JSONResponse({"code": exc.code}, status_code=exc.status)
@@ -55,9 +81,14 @@ def register(spec: DeploymentSpec, key: str = Header(alias="Idempotency-Key"), u
 
 
 @app.get("/deployments")
-def deployments(limit: int = 50, offset: int = 0, user=Depends(principal)):
+def deployments(limit: int = 50, offset: int = 0, workspace: bool = False, user=Depends(principal)):
     with closing(reader()) as conn:
-        return {"items": registry.list(conn, user, limit, offset)}
+        rows = registry.list(conn, user, limit, offset)
+        if workspace:
+            fields = ("deployment_id", "provider", "runtime_type", "ownership", "connection_mode",
+                      "execution_policy", "capabilities", "source_id", "status")
+            rows = [{key: row[key] for key in fields} for row in rows]
+        return {"items": rows}
 
 
 @app.get("/deployments/{deployment_id}")
